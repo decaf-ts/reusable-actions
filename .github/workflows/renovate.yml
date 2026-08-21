@@ -1,0 +1,140 @@
+name: "Renovate"
+
+on:
+  workflow_call:
+    inputs:
+      pr-strategy:
+        description: "PR strategy for security remediation. overrides = pin the offending library + its next safe version into package.json overrides (npm transitive remediation). bump-dependents = update the dependency that depends on the offending library to its last safe release. both = apply both rule sets."
+        type: string
+        required: false
+        default: "bump-dependents"
+      clear-stale-overrides:
+        description: "Remove package.json overrides entries that no longer correspond to a known vulnerability (used by the weekly dep run)."
+        type: boolean
+        required: false
+        default: false
+      renovate-config-file:
+        description: "Path to the base renovate.json config in the caller repo. Strategy rules are merged into a generated runtime config."
+        type: string
+        required: false
+        default: "renovate.json"
+    secrets:
+      RENOVATE_TOKEN:
+        required: false
+      GH_PAT:
+        required: false
+
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clear stale overrides
+        if: inputs.clear-stale-overrides == true
+        shell: bash
+        run: |
+          if [ ! -f package.json ]; then
+            echo "no package.json; nothing to clear"
+            exit 0
+          fi
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkgPath = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          const overrides = pkg.overrides;
+          if (!overrides || Object.keys(overrides).length === 0) {
+            console.log('no overrides present; nothing to clear');
+            process.exit(0);
+          }
+          // An override is stale when its package no longer appears as
+          // vulnerable in the latest trivy report. Without a report we keep
+          // the overrides (we cannot prove they are stale).
+          let vulnPackages = null;
+          if (fs.existsSync('trivy-report.json')) {
+            try {
+              const report = JSON.parse(fs.readFileSync('trivy-report.json', 'utf8'));
+              const set = new Set();
+              for (const r of report.Results || []) {
+                for (const v of r.Vulnerabilities || []) {
+                  if (v.PkgName) set.add(v.PkgName);
+                }
+              }
+              vulnPackages = set;
+            } catch (e) {
+              console.log('could not parse trivy-report.json; keeping overrides (' + e.message + ')');
+              process.exit(0);
+            }
+          } else {
+            console.log('no trivy-report.json found; keeping overrides (cannot prove they are stale)');
+            process.exit(0);
+          }
+          let removed = 0;
+          for (const name of Object.keys(overrides)) {
+            if (!vulnPackages.has(name)) {
+              delete overrides[name];
+              removed++;
+            }
+          }
+          if (removed > 0) {
+            pkg.overrides = overrides;
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+            console.log(`removed ${removed} stale override(s)`);
+          } else {
+            console.log('no stale overrides found');
+          }
+          NODE
+
+      - name: Prepare strategy config
+        shell: bash
+        env:
+          PR_STRATEGY: ${{ inputs.pr-strategy }}
+          BASE_CONFIG: ${{ inputs.renovate-config-file }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const strategy = process.env.PR_STRATEGY;
+          const base = process.env.BASE_CONFIG;
+          let config = {};
+          if (base && fs.existsSync(base)) {
+            config = JSON.parse(fs.readFileSync(base, 'utf8'));
+          } else {
+            config = { extends: ["security:only-security-updates"] };
+          }
+          config.$schema = config.$schema || "https://docs.renovatebot.com/renovate-schema.json";
+          config.packageRules = Array.isArray(config.packageRules) ? config.packageRules : [];
+          if (strategy === 'overrides' || strategy === 'both') {
+            // Strategy A: pin the offending library + its next safe version
+            // into package.json `overrides` via npm transitive remediation.
+            config.transitiveRemediation = true;
+            config.packageRules.push({
+              description: "Strategy A (overrides): pin offending library + next safe version into package.json overrides",
+              matchCategories: ["security"],
+              rangeStrategy: "replace",
+              automerge: true,
+              automergeType: "pr"
+            });
+          }
+          if (strategy === 'bump-dependents' || strategy === 'both') {
+            // Strategy B: bump the dependency that depends on the offending
+            // library to its last safe release.
+            config.packageRules.push({
+              description: "Strategy B (bump-dependents): bump the dependency that depends on the offending library to its last safe release",
+              matchCategories: ["security"],
+              rangeStrategy: "bump",
+              automerge: true,
+              automergeType: "pr"
+            });
+          }
+          fs.writeFileSync('renovate-runtime.json', JSON.stringify(config, null, 2) + '\n');
+          console.log('wrote renovate-runtime.json (strategy=' + strategy + ', packageRules=' + config.packageRules.length + ')');
+          NODE
+
+      - name: Run Renovate
+        uses: renovatebot/github-action@v46.1.14
+        with:
+          configurationFile: renovate-runtime.json
+        env:
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+          RENOVATE_REPOSITORIES: ${{ github.repository }}

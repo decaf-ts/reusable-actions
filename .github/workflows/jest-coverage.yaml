@@ -45,6 +45,9 @@ jobs:
       - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
         run: npm run build:prod
 
+      - name: Prepare integration-test infra
+        run: npm run prepare-it-tests --if-present
+
       - run: npm run coverage
       - name: Tests ✅
         if: ${{ success() }}

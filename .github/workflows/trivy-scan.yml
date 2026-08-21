@@ -1,0 +1,111 @@
+name: "Trivy Security Scan"
+
+on:
+  workflow_call:
+    inputs:
+      scan-type:
+        description: "vuln = vulnerability scan (severity-filtered, upload JSON artifact, fail/report on found vulns and dispatch renovate on findings); dep = dependency-update pass that drives the weekly renovate path."
+        type: string
+        required: false
+        default: "vuln"
+      severity:
+        description: "Comma-separated Trivy severity filter applied to the vuln scan (e.g. HIGH,CRITICAL)."
+        type: string
+        required: false
+        default: "HIGH,CRITICAL"
+      ignore-unfixed:
+        description: "Ignore vulnerabilities that do not have a known fix."
+        type: boolean
+        required: false
+        default: true
+      exit-code:
+        description: "Trivy exit-code when vulnerabilities are found during a vuln scan (0 = report only, 1 = fail the job). Ignored for scan-type: dep."
+        type: string
+        required: false
+        default: "1"
+      upload-artifact:
+        description: "Upload the generated trivy-report.json as a workflow artifact."
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      GH_PAT:
+        required: false
+
+jobs:
+  trivy-scan:
+    name: Trivy ${{ inputs.scan-type }} scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve Trivy exit-code
+        id: resolve
+        run: |
+          if [ "${{ inputs.scan-type }}" = "vuln" ]; then
+            echo "exit-code=${{ inputs.exit-code }}" >> "$GITHUB_OUTPUT"
+          else
+            # The dep pass never fails the job on findings; it only drives renovate.
+            echo "exit-code=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate Trivy Vulnerability Report
+        id: trivy
+        continue-on-error: ${{ inputs.scan-type == 'dep' }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "fs"
+          output: trivy-report.json
+          format: json
+          scan-ref: .
+          exit-code: ${{ steps.resolve.outputs.exit-code }}
+          severity: ${{ inputs.severity }}
+          ignore-unfixed: ${{ inputs.ignore-unfixed }}
+
+      - name: Upload Vulnerability Scan Results
+        if: always() && inputs.upload-artifact == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.json
+          retention-days: 30
+
+      - name: Count vulnerabilities
+        if: always()
+        id: check
+        run: |
+          if [ ! -f trivy-report.json ]; then
+            echo "vulnerabilities=false" >> "$GITHUB_OUTPUT"
+            echo "count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          COUNT=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy-report.json)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "vulnerabilities=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "vulnerabilities=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger Renovate (vuln found -> security updates)
+        if: always() && inputs.scan-type == 'vuln' && steps.check.outputs.vulnerabilities == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_PAT not provided; skipping renovate dispatch"
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/dispatches" -f event_type=renovate-trigger
+
+      - name: Trigger Renovate (weekly dep pass)
+        if: always() && inputs.scan-type == 'dep'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_PAT not provided; skipping renovate dispatch"
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/dispatches" -f event_type=renovate-dep-trigger
