@@ -2,6 +2,11 @@ name: 'Test Coverage'
 
 on:
   workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: jest-coverage-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   coverage:
@@ -9,7 +14,9 @@ jobs:
     strategy:
       matrix:
         node-version: [22]
-    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    # No explicit skip-CI check needed: GitHub natively skips push/pull_request runs
+    # whose commit message ends with [skip ci] before any job would even start.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
         uses: actions/checkout@v4

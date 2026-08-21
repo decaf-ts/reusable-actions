@@ -2,8 +2,12 @@ name: "Release on Tag"
 
 on:
   workflow_call:
+  workflow_dispatch:
 
 jobs:
+  # No explicit skip-CI check needed: the caller triggers this on tag push (a push
+  # event), and GitHub natively skips push runs whose commit message ends with
+  # [skip ci] before any job would even start.
   deploy:
     runs-on: ubuntu-latest
     strategy:
@@ -28,6 +32,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          body: ${{ github.event.head_commit.message }}
           files: |
             Release.txt
             README.md

@@ -49,6 +49,8 @@ caller selects the remediation PR strategy through inputs:
 | `pr-strategy`           | `bump-dependents` | `overrides` = pin the offending library + its next safe version into `package.json` `overrides` (npm transitive remediation). `bump-dependents` = bump the dependency that brings in the offending library to its last safe release. `both` = apply both rule sets. |
 | `clear-stale-overrides` | `false`           | Remove `package.json` `overrides` entries whose package no longer appears as vulnerable in the latest `trivy-report.json` (used by the weekly dep run).                                                                                                             |
 | `renovate-config-file`  | `renovate.json`   | Base Renovate config in the caller repo. Strategy rules are merged into a generated `renovate-runtime.json` that Renovate actually consumes.                                                                                                                        |
+| `target-branch`         | `master`          | Branch to check out and target as Renovate's base branch for remediation PRs.                                                                                                                                                                                        |
+| `severity`              | `HIGH,CRITICAL`   | Comma-separated severity filter. Remediation is scoped (via `matchPackageNames`) to only the packages `trivy-report.json` flags at one of these severities; without a report there's nothing to scope by, so every security-category package is remediated as before this input existed.                        |
 
 Secrets: `RENOVATE_TOKEN` (required for Renovate auth) and `GH_PAT` (optional).
 Pass with `secrets: inherit`.

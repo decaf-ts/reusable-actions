@@ -2,7 +2,7 @@ name: "Trivy Security Scan"
 
 on:
   workflow_call:
-    inputs:
+    inputs: &trivy-scan-inputs
       scan-type:
         description: "vuln = vulnerability scan (severity-filtered, upload JSON artifact, fail/report on found vulns and dispatch renovate on findings); dep = dependency-update pass that drives the weekly renovate path."
         type: string
@@ -28,17 +28,35 @@ on:
         type: boolean
         required: false
         default: true
+      target-branch:
+        description: "Branch to check out and scan. Defaults to master."
+        type: string
+        required: false
+        default: "master"
     secrets:
       GH_PAT:
         required: false
+  workflow_dispatch:
+    inputs: *trivy-scan-inputs
+
+concurrency:
+  group: trivy-scan-${{ github.repository }}-${{ github.ref }}-${{ inputs.scan-type }}
+  cancel-in-progress: true
 
 jobs:
+  # No explicit skip-CI check needed: this workflow is push/pull_request-triggered,
+  # and GitHub natively skips those runs when the commit message ends with [skip ci]
+  # before any job would even start.
   trivy-scan:
     name: Trivy ${{ inputs.scan-type }} scan
     runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: ${{ inputs.target-branch }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
 
       - name: Resolve Trivy exit-code
         id: resolve

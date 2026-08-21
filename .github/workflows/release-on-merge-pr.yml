@@ -2,10 +2,16 @@ name: "Run on PR Merge to Master"
 
 on:
   workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: release-on-merge-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   merge:
     runs-on: ubuntu-latest
+    if: '!endsWith(github.event.pull_request.title, ''-no-ci'')'
     permissions:
       actions: read
       contents: write

@@ -2,8 +2,16 @@ name: "Pages Builder"
 
 on:
   workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: pages-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
+  # No explicit skip-CI check needed: this workflow is push/workflow_dispatch-triggered,
+  # and GitHub natively skips push runs whose commit message ends with [skip ci]
+  # before any job would even start.
   deploy:
     permissions:
       contents: read
@@ -26,12 +34,25 @@ jobs:
         id: cache-npm
         uses: actions/cache@v4
         with:
-          path: ~/.npm
+          path: |
+            ~/.npm
+            node_modules
           key: deps-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             deps-${{ runner.os }}-${{ matrix.node-version }}-
       - run: npm ci
-      - run: npm run build:prod
+      - name: Cache Build
+        id: cache-build
+        uses: actions/cache@v4
+        with:
+          path: |
+            lib
+            dist
+          key: build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            build-${{ runner.os }}-${{ matrix.node-version }}-
+      - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
+        run: npm run build:prod
       - run: npm run coverage
       - run: npm run docs
       - name: Setup Pages

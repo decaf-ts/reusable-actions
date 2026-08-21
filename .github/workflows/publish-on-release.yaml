@@ -2,9 +2,17 @@ name: "Publish on Release"
 
 on:
   workflow_call:
+  workflow_dispatch:
 
 jobs:
   build:
+    # release-on-tag.yaml sets the release body to the tag's commit message, so this
+    # can be checked from the event context alone -- no runner needs to start to skip.
+    # release events are never covered by GitHub's native skip-CI keywords, so this
+    # check is the only thing that catches it -- but tag-release.sh/ReleaseScript
+    # normalize whatever skip-CI flag a user typed to this one canonical flag before
+    # it's ever committed, so only this one needs checking.
+    if: '!endsWith(github.event.release.body, ''[skip ci]'')'
     strategy:
       matrix:
         node-version: [22]
@@ -41,7 +49,25 @@ jobs:
       - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
         run: npm run build:prod
       - run: npm run test:all
-      - run: npm publish --access public
+      - name: Resolve publish config
+        id: publish-config
+        run: |
+          node -e '
+            const fs = require("fs");
+            const pkg = require("./package.json");
+            const access = (pkg.publishConfig && pkg.publishConfig.access) || "public";
+            const isPrerelease = /-[0-9A-Za-z.-]+$/.test(pkg.version || "");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `access=${access}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${isPrerelease ? "prerelease" : ""}\n`);
+          '
+      - name: Publish
+        run: |
+          ACCESS="${{ steps.publish-config.outputs.access }}"
+          TAG_FLAG=""
+          if [[ -n "${{ steps.publish-config.outputs.tag }}" ]]; then
+            TAG_FLAG="--tag ${{ steps.publish-config.outputs.tag }}"
+          fi
+          npm publish --access "$ACCESS" $TAG_FLAG
         env:
           GITHUB_TOKEN: ${{ secrets.CONSECUTIVE_ACTION_TRIGGER }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
