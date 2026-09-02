@@ -2,12 +2,6 @@ name: 'Test Coverage'
 
 on:
   workflow_call:
-    inputs:
-      coverage-threshold:
-        description: "Minimum total statement coverage (%) enforced by the PR coverage report. 0 (default) disables it — coverage is then evaluated by jest itself against each module's workdocs/reports/jest.coverage.config.cjs coverageThreshold."
-        type: number
-        required: false
-        default: 0
   workflow_dispatch:
 
 concurrency:
@@ -97,4 +91,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          threshold: ${{ inputs.coverage-threshold }}
+          # report-only: coverage enforcement happens in `npm run coverage`
+          # via each module's workdocs/reports/jest.coverage.config.cjs
+          # coverageThreshold (jest exits non-zero when not met)
+          threshold: 0

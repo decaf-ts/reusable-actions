@@ -89,6 +89,11 @@ jobs:
     secrets: inherit
 ```
 
+Coverage enforcement is **not** configured by the action: `npm run coverage`
+runs jest with each module's `workdocs/reports/jest.coverage.config.cjs`, whose
+`coverageThreshold` is the single source of truth (jest exits non-zero when it
+is not met). The PR coverage report (artiomtr) is report-only.
+
 ## Integration-test infrastructure contract (`prepare-it-tests`)
 
 Every shared workflow that executes tests (`jest-coverage.yaml`, `nodejs-build-prod.yaml`, `pages.yaml`, `release-on-merge-pr.yml`, `publish-on-release.yaml`) runs:
