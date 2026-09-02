@@ -116,6 +116,8 @@ workflow per PR merge** (not counting the PR checks):
   the job is skipped — zero execution).
 * `trivy-scan.yml` and `pages.yaml` carry the same skip condition as
   defense-in-depth for repos that keep push triggers on them.
+* Recommended caller pattern: deploy pages on the release tag push only
+  (every merge releases), so each merge yields exactly one docs deployment.
 
 The `Github Action automatic release` commit-message prefix is therefore a
 contract between the shared workflows — do not rename it in
