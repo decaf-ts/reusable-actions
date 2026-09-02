@@ -103,6 +103,24 @@ backing infrastructure (databases, containers, networks, ...) must define a
 may either omit the script (`--if-present` makes it optional) or define a
 no-op for explicitness, e.g. `echo "prepare-it-tests: no infra to boot"`.
 
+## Invocation contract (one run per merge)
+
+`release-on-merge-pr.yml` pushes an automatic release-bump commit to master
+(`Github Action automatic release: vX.Y.Z`) together with the release tag.
+That second push would re-trigger every push-triggered workflow, duplicating
+runs. To keep **exactly one executing invocation of each workflow per PR
+merge** (not counting the PR checks):
+
+* `trivy-scan.yml` and `pages.yaml` skip push events whose head commit
+  message starts with `Github Action automatic release` (the run is created
+  by the trigger but the job is skipped — zero execution).
+* `snyk-analysis.yml` and `codeql-analysis.yml` run on the tag push (their
+  push triggers are tag-only) and genuinely execute there.
+
+The `Github Action automatic release` commit-message prefix is therefore a
+contract between the shared workflows — do not rename it in
+`release-on-merge-pr.yml` without updating the skip conditions.
+
 ## Secret fallbacks
 
 Shared workflows resolve the GitHub PAT through a fallback chain

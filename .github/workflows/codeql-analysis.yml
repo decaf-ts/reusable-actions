@@ -14,7 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     # No explicit skip-CI check needed: GitHub natively skips push/pull_request runs
     # whose commit message ends with [skip ci] before any job would even start.
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    # push/schedule are required so tag-push releases and the weekly cron scan
+    # actually run (the caller's triggers include both).
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     permissions:
       actions: read
       contents: read

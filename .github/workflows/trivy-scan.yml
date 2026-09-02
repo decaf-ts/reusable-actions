@@ -50,6 +50,9 @@ jobs:
   trivy-scan:
     name: Trivy ${{ inputs.scan-type }} scan
     runs-on: ubuntu-latest
+    # Skip the automatic release-bump commit pushed by release-on-merge-pr.yml
+    # so a PR merge yields exactly ONE executing trivy run (on the merge commit).
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Github Action automatic release')
     env:
       TARGET_BRANCH: ${{ inputs.target-branch }}
     steps:

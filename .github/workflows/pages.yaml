@@ -13,6 +13,9 @@ jobs:
   # and GitHub natively skips push runs whose commit message ends with [skip ci]
   # before any job would even start.
   deploy:
+    # Skip the automatic release-bump commit pushed by release-on-merge-pr.yml
+    # so a PR merge yields exactly ONE pages deployment (on the merge commit).
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Github Action automatic release')
     permissions:
       contents: read
       pages: write

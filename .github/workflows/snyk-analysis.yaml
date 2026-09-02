@@ -18,7 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     # No explicit skip-CI check needed: GitHub natively skips push/pull_request runs
     # whose commit message ends with [skip ci] before any job would even start.
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    # push is required so tag-push releases actually get scanned (the caller's
+    # push trigger is tag-only).
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@master
       - name: Run Snyk to check for vulnerabilities
