@@ -1,8 +1,45 @@
 name: "Release on Tag"
 
+# Triggered by the tag pushed from release-on-merge-pr.yml (or a manual
+# tag-release.sh push). Runs the snyk + trivy RELEASE GATES first: a failing
+# gate blocks the GitHub Release from being created, which in turn blocks
+# publish-on-release (npm publish). Only when the gates are green is the
+# Release created (PAT-authored so the `release` event fires).
+
 on:
   workflow_call:
+    inputs: &release-on-tag-inputs
+      run-security-scans:
+        description: "Run the snyk + trivy release gates before creating the GitHub Release. A failing gate blocks the release (and therefore the npm publish)."
+        type: boolean
+        required: false
+        default: true
+      trivy-severity:
+        description: "Comma-separated Trivy severity filter for the release gate."
+        type: string
+        required: false
+        default: "HIGH,CRITICAL"
+      trivy-ignore-unfixed:
+        description: "Ignore release-gate vulnerabilities that have no known fix."
+        type: boolean
+        required: false
+        default: true
+      snyk-severity-threshold:
+        description: "Minimum snyk severity that blocks the release (low | medium | high | critical)."
+        type: string
+        required: false
+        default: "high"
+    secrets:
+      GH_PAT:
+        required: false
+      GH_TOKEN:
+        required: false
+      CONSECUTIVE_ACTION_TRIGGER:
+        required: false
+      SNYK_TOKEN:
+        required: false
   workflow_dispatch:
+    inputs: *release-on-tag-inputs
 
 jobs:
   # No explicit skip-CI check needed: the caller triggers this on tag push (a push
@@ -15,6 +52,9 @@ jobs:
         node-version: [22]
     permissions:
       contents: write
+      security-events: write
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,6 +62,51 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+
+      # ------------------------------------------------------------------
+      # Release gates: any failure below blocks the Release and the publish.
+      # ------------------------------------------------------------------
+      - name: Trivy release gate
+        if: inputs.run-security-scans != false
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "fs"
+          format: "table"
+          exit-code: "1"
+          severity: ${{ inputs.trivy-severity }}
+          ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
+
+      - name: Snyk release gate
+        # skipped when the repo has no SNYK_TOKEN configured
+        if: inputs.run-security-scans != false && env.SNYK_TOKEN != ''
+        uses: snyk/actions/node@master
+        with:
+          args: --severity-threshold=${{ inputs.snyk-severity-threshold }} --sarif-file-output=snyk.sarif
+
+      - name: Upload snyk result to GitHub Code Scanning
+        if: always() && inputs.run-security-scans != false && env.SNYK_TOKEN != ''
+        # reporting only -- must never block the release by itself
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk.sarif
+
+      - name: Dispatch renovate on gate failure
+        # open security-remediation PRs automatically when a gate blocks the release
+        if: failure() && inputs.run-security-scans != false
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GH_TOKEN || secrets.CONSECUTIVE_ACTION_TRIGGER }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "no PAT configured; skipping renovate dispatch"
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/dispatches" -f event_type=renovate-trigger || true
+
+      # ------------------------------------------------------------------
+      # Release creation
+      # ------------------------------------------------------------------
       - name: Build Release
         run: echo ${{ github.sha }} > Release.txt
       - name: Test

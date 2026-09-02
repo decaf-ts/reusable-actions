@@ -108,18 +108,45 @@ no-op for explicitness, e.g. `echo "prepare-it-tests: no infra to boot"`.
 `release-on-merge-pr.yml` pushes an automatic release-bump commit to master
 (`Github Action automatic release: vX.Y.Z`) together with the release tag.
 That second push would re-trigger every push-triggered workflow, duplicating
-runs. To keep **exactly one executing invocation of each workflow per PR
-merge** (not counting the PR checks):
+runs. The shared workflows keep **exactly one executing invocation of each
+workflow per PR merge** (not counting the PR checks):
 
-* `trivy-scan.yml` and `pages.yaml` skip push events whose head commit
-  message starts with `Github Action automatic release` (the run is created
-  by the trigger but the job is skipped — zero execution).
-* `snyk-analysis.yml` and `codeql-analysis.yml` run on the tag push (their
-  push triggers are tag-only) and genuinely execute there.
+* `pages.yaml` skips push events whose head commit message starts with
+  `Github Action automatic release` (the run is created by the trigger but
+  the job is skipped — zero execution).
+* `trivy-scan.yml` and `pages.yaml` carry the same skip condition as
+  defense-in-depth for repos that keep push triggers on them.
 
 The `Github Action automatic release` commit-message prefix is therefore a
 contract between the shared workflows — do not rename it in
 `release-on-merge-pr.yml` without updating the skip conditions.
+
+## Security scanning model (release gates)
+
+The snyk and trivy scans do **not** run per-PR/per-push. They run once per
+release, as gates inside `release-on-tag.yaml`, on the tag-push event:
+
+```text
+PR merge -> release-on-merge-pr (bump + tag)
+        -> tag push -> release-on-tag: [trivy gate] [snyk gate] -> GitHub Release
+        -> release published -> publish-on-release (npm publish)
+```
+
+* A failing gate **blocks the GitHub Release from being created**, which in
+  turn blocks the npm publish — nothing reaches the registry.
+* Gate failures dispatch `renovate-trigger` so security-remediation PRs are
+  opened automatically.
+* Gate behavior is tunable through `release-on-tag.yaml` inputs:
+  `run-security-scans` (default `true`), `trivy-severity` (default
+  `HIGH,CRITICAL`), `trivy-ignore-unfixed` (default `true`),
+  `snyk-severity-threshold` (default `high`). The snyk gate is skipped
+  automatically when the repo has no `SNYK_TOKEN` secret.
+* The snyk SARIF upload to code scanning is reporting-only and never blocks
+  a release by itself.
+* The standalone `trivy-scan.yml` workflow remains for the weekly
+  dependency-update pass (which drives the renovate dep run) and manual
+  diagnostics; the standalone `snyk-analysis.yaml` workflow remains for
+  manual/on-demand scans.
 
 ## Secret fallbacks
 
