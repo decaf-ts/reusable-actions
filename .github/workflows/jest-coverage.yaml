@@ -76,6 +76,9 @@ jobs:
           }'
 
       - uses: artiomtr/jest-coverage-report-action@v2.0-rc.1
+        # The report action only supports pull_request events; skip it on
+        # workflow_dispatch runs so manual dispatches don't fail the job.
+        if: github.event_name == 'pull_request'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           threshold: 80
