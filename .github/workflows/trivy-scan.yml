@@ -109,7 +109,7 @@ jobs:
       - name: Trigger Renovate (vuln found -> security updates)
         if: always() && inputs.scan-type == 'vuln' && steps.check.outputs.vulnerabilities == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "GH_PAT not provided; skipping renovate dispatch"
@@ -120,7 +120,7 @@ jobs:
       - name: Trigger Renovate (weekly dep pass)
         if: always() && inputs.scan-type == 'dep'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "GH_PAT not provided; skipping renovate dispatch"

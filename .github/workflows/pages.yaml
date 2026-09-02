@@ -53,6 +53,8 @@ jobs:
             build-${{ runner.os }}-${{ matrix.node-version }}-
       - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
         run: npm run build:prod
+      - name: Prepare integration-test infra
+        run: npm run prepare-it-tests --if-present
       - run: npm run coverage
       - run: npm run docs
       - name: Setup Pages

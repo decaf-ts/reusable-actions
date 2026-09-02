@@ -48,6 +48,8 @@ jobs:
             build-${{ runner.os }}-${{ matrix.node-version }}-
       - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
         run: npm run build:prod
+      - name: Prepare integration-test infra
+        run: npm run prepare-it-tests --if-present
       - run: npm run test:all
       - name: Resolve publish config
         id: publish-config
@@ -69,5 +71,9 @@ jobs:
           fi
           npm publish --access "$ACCESS" $TAG_FLAG
         env:
-          GITHUB_TOKEN: ${{ secrets.CONSECUTIVE_ACTION_TRIGGER }}
+          GITHUB_TOKEN: ${{ secrets.CONSECUTIVE_ACTION_TRIGGER || secrets.GH_PAT || secrets.GH_TOKEN }}
+          # NODE_AUTH_TOKEN is read by the .npmrc that setup-node generates from
+          # `registry-url`; NPM_TOKEN covers repos that ship a committed .npmrc
+          # reading ${NPM_TOKEN} directly.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
