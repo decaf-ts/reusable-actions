@@ -48,6 +48,16 @@ jobs:
         run: npm version patch
       - name: Build
         run: npm run build:prod
+      - name: Login to GitHub Container Registry
+        env:
+          REGISTRY_PAT: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
+        run: |
+          if [ -n "$REGISTRY_PAT" ]; then
+            echo "$REGISTRY_PAT" | docker login ghcr.io -u decaf-ts-admin --password-stdin
+          else
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          fi
+
       - name: Prepare integration-test infra
         run: npm run prepare-it-tests --if-present
       - name: Test

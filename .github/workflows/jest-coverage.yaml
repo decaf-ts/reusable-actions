@@ -4,10 +4,10 @@ on:
   workflow_call:
     inputs:
       coverage-threshold:
-        description: "Minimum total statement coverage (%) enforced by the PR coverage report. Set to 0 to disable the threshold check."
+        description: "Minimum total statement coverage (%) enforced by the PR coverage report. 0 (default) disables it — coverage is then evaluated by jest itself against each module's workdocs/reports/jest.coverage.config.cjs coverageThreshold."
         type: number
         required: false
-        default: 80
+        default: 0
   workflow_dispatch:
 
 concurrency:
@@ -57,6 +57,16 @@ jobs:
 
       - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
         run: npm run build:prod
+
+      - name: Login to GitHub Container Registry
+        env:
+          REGISTRY_PAT: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
+        run: |
+          if [ -n "$REGISTRY_PAT" ]; then
+            echo "$REGISTRY_PAT" | docker login ghcr.io -u decaf-ts-admin --password-stdin
+          else
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          fi
 
       - name: Prepare integration-test infra
         run: npm run prepare-it-tests --if-present
