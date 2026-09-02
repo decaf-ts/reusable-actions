@@ -2,6 +2,12 @@ name: 'Test Coverage'
 
 on:
   workflow_call:
+    inputs:
+      coverage-threshold:
+        description: "Minimum total statement coverage (%) enforced by the PR coverage report. Set to 0 to disable the threshold check."
+        type: number
+        required: false
+        default: 80
   workflow_dispatch:
 
 concurrency:
@@ -81,4 +87,4 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          threshold: 80
+          threshold: ${{ inputs.coverage-threshold }}
