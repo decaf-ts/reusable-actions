@@ -36,6 +36,8 @@ on:
     secrets:
       GH_PAT:
         required: false
+      GH_TOKEN:
+        required: false
   workflow_dispatch:
     inputs: *trivy-scan-inputs
 

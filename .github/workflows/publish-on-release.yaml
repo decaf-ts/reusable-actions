@@ -2,6 +2,15 @@ name: "Publish on Release"
 
 on:
   workflow_call:
+    secrets:
+      NPM_TOKEN:
+        required: false
+      CONSECUTIVE_ACTION_TRIGGER:
+        required: false
+      GH_PAT:
+        required: false
+      GH_TOKEN:
+        required: false
   workflow_dispatch:
 
 jobs:

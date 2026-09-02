@@ -2,6 +2,11 @@ name: "Run on PR Merge to Master"
 
 on:
   workflow_call:
+    secrets:
+      GH_PAT:
+        required: false
+      GH_TOKEN:
+        required: false
   workflow_dispatch:
 
 concurrency:
