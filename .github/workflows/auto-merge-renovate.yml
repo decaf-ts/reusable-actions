@@ -1,10 +1,12 @@
 name: "Auto Approve and Merge Renovate PRs"
 
-# Reusable bot-PR automation: waits for every status check on the PR to pass,
-# approves it and enables auto-merge, so dependency-update PRs (renovate,
-# dependabot) release without human interaction. The caller MUST gate its job
-# with an actor `if:` (e.g. renovate[bot] / dependabot[bot]) - this workflow
-# trusts the caller's filter and approves whatever PR it is invoked for.
+# Reusable bot-PR automation: waits until every OTHER status check on the PR
+# has passed (this workflow's own check runs are excluded - watching them from
+# the inside would never terminate), then approves the PR and merges it, so
+# renovate dependency-update PRs release without human interaction.
+# The caller MUST gate its job with an actor `if:` (renovate[bot]) - this
+# workflow trusts the caller's filter and approves whatever PR it is invoked
+# for.
 
 on:
   workflow_call:
@@ -23,18 +25,33 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          # gh pr checks fails outright while no check has registered yet
-          # (a race on 'opened'), so poll until the first check shows up,
-          # then watch to completion.
-          echo "waiting for the first CI check to register on PR #$PR_NUMBER..."
-          for i in $(seq 1 30); do
-            if [ -n "$(gh pr checks "$PR_NUMBER" --repo "$REPO" 2>/dev/null)" ]; then
-              echo "checks registered; watching until completion"
-              exec gh pr checks "$PR_NUMBER" --repo "$REPO" --watch --fail-fast
+          # This job's own check runs must be excluded: 'Wait for Tests' is
+          # in_progress for as long as this very loop runs, and 'Auto Approve
+          # and Merge' has not started yet, so watching every check would
+          # never terminate.
+          for i in $(seq 1 60); do
+            JSON=$(gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,bucket 2>/dev/null) || JSON="[]"
+            OTHERS=$(echo "$JSON" | jq 'map(select(.name != "Wait for Tests" and .name != "Auto Approve and Merge"))')
+            N=$(echo "$OTHERS" | jq 'length')
+            if [ "$N" -gt 0 ]; then
+              FAILED=$(echo "$OTHERS" | jq '[.[] | select(.bucket == "fail")] | length')
+              PENDING=$(echo "$OTHERS" | jq '[.[] | select(.bucket == "pending")] | length')
+              if [ "$FAILED" -gt 0 ]; then
+                echo "::error::at least one PR check failed:"
+                echo "$OTHERS" | jq -r '.[] | select(.bucket == "fail") | "  \(.name)"'
+                exit 1
+              fi
+              if [ "$PENDING" -eq 0 ]; then
+                echo "all $N PR check(s) passed"
+                exit 0
+              fi
+              echo "poll $i/60: $PENDING of $N check(s) still pending..."
+            else
+              echo "poll $i/60: waiting for the first CI check to register..."
             fi
-            sleep 20
+            sleep 30
           done
-          echo "::error::no CI checks registered on PR #$PR_NUMBER after 10 minutes"
+          echo "::error::PR checks still pending (or absent) after 30 minutes"
           exit 1
 
   auto-approve-merge:
@@ -49,9 +66,15 @@ jobs:
           REPO: ${{ github.repository }}
         run: gh pr review "$PR_NUMBER" --repo "$REPO" --approve
 
-      - name: Enable auto-merge
+      - name: Merge PR
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-        run: gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --auto
+        run: |
+          # Every check already passed in wait-for-tests. --auto lets GitHub
+          # hold the merge until any remaining branch-protection requirements
+          # are satisfied; where repo auto-merge is disabled or nothing else
+          # blocks the PR, fall back to a direct merge.
+          gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --auto \
+            || gh pr merge "$PR_NUMBER" --repo "$REPO" --squash
