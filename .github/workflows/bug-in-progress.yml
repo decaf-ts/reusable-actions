@@ -1,0 +1,60 @@
+name: "Bug In Progress (branch bootstrap)"
+
+# Reusable Jira-automation hook: callers fire it from repository_dispatch
+# 'decaf_bug_in_progress' to create the bug branch named in the payload.
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        description: "Branch name to create (from the dispatch client payload)."
+        type: string
+        required: true
+
+jobs:
+  create-branch:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Validate payload
+        env:
+          BRANCH_NAME: ${{ inputs.branch }}
+        run: |
+          if [ -z "$BRANCH_NAME" ]; then
+            echo "Branch name is missing in client_payload.branch"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Create branch if not exists
+        env:
+          BRANCH_NAME: ${{ inputs.branch }}
+        run: |
+          set -e
+
+          echo "Branch requested: $BRANCH_NAME"
+
+          if ! [[ "$BRANCH_NAME" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+            echo "Invalid branch name: $BRANCH_NAME"
+            exit 1
+          fi
+
+          git fetch origin
+
+          if git ls-remote --exit-code --heads origin "$BRANCH_NAME" > /dev/null; then
+            echo "Branch already exists. Skipping creation."
+            exit 0
+          fi
+
+          git checkout -b "$BRANCH_NAME"
+          git push origin "$BRANCH_NAME"
+
+          echo "Branch created successfully: $BRANCH_NAME"
