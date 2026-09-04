@@ -1,18 +1,30 @@
 name: "Docker Build & Publish"
 
 # Reusable docker image build/publish, versatile enough for any image the
-# decaf-ts modules produce: custom image name, Dockerfile and context, tag
-# prefix (e.g. base-, paperclip-, contract-) and floating alias, optional
-# npm-token build secret (mounted as secret id=TOKEN for private-package
-# installs inside the image), optional pre-build command, multi-platform.
+# decaf-ts modules produce: one or several registries, custom image name,
+# Dockerfile and context, tag prefix (e.g. base-, paperclip-, contract-) and
+# floating alias, npm-token build secret (always mounted as id=TOKEN, assumed
+# present like in publish-on-release), optional pre-build command, optional
+# full build/test + trivy vulnerability scan (NO renovate dispatch) in front
+# of the image build, multi-platform, layer-cached via the GHA cache backend.
 
 on:
   workflow_call:
     inputs:
       image:
-        description: "Image path under ghcr.io (e.g. decaf-ts/couchdb, decaf-ts/with-ai)."
+        description: "Image path under each registry (e.g. decaf-ts/couchdb, decaf-ts/with-ai)."
         type: string
         required: true
+      registries:
+        description: "Comma-separated registries to log in to and push the image to (e.g. 'ghcr.io' or 'ghcr.io,docker.io')."
+        type: string
+        required: false
+        default: "ghcr.io"
+      registry-user:
+        description: "Username for the registry logins."
+        type: string
+        required: false
+        default: "decaf-ts-admin"
       dockerfile:
         description: "Path to the Dockerfile to build."
         type: string
@@ -39,7 +51,7 @@ on:
         required: false
         default: ""
       push:
-        description: "Push the built image to the registry (false = build only)."
+        description: "Push the built image to the registries (false = build only)."
         type: boolean
         required: false
         default: true
@@ -48,32 +60,40 @@ on:
         type: string
         required: false
         default: "linux/amd64"
-      mount-npm-token:
-        description: "Mount the repo's NPM_TOKEN secret into the build as secret id=TOKEN (for private-package installs inside the image)."
-        type: boolean
-        required: false
-        default: false
       pre-build-command:
-        description: "Optional command run in the checked-out repo before docker build (e.g. contract compilation)."
+        description: "Optional command run in the checked-out repo before the image build (e.g. contract compilation)."
         type: string
         required: false
         default: ""
       no-cache:
-        description: "Build with --no-cache."
+        description: "Build with --no-cache (disables layer cache reuse for this build)."
         type: boolean
         required: false
         default: false
-      registry-user:
-        description: "Username for the ghcr.io login."
+      run-build-test:
+        description: "Run a full build + test (npm ci, build:prod, prepare-it-tests, test:all) before building the image."
+        type: boolean
+        required: false
+        default: false
+      run-trivy-scan:
+        description: "Run a trivy vulnerability scan (fail on findings, NO renovate dispatch) before building the image."
+        type: boolean
+        required: false
+        default: false
+      scan-severity:
+        description: "Severity filter for the optional trivy scan."
         type: string
         required: false
-        default: "decaf-ts-admin"
+        default: "HIGH,CRITICAL"
     secrets:
       GH_PAT:
         required: false
       GH_TOKEN:
         required: false
       NPM_TOKEN:
+        required: false
+      REGISTRY_TOKEN:
+        description: "Registry password for non-ghcr registries (or overrides GH_PAT for ghcr)."
         required: false
 
 jobs:
@@ -87,6 +107,49 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Cache dependencies
+        if: inputs.run-build-test || inputs.pre-build-command != ''
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+          key: deps-${{ runner.os }}-22-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            deps-${{ runner.os }}-22-
+
+      - name: Install dependencies
+        if: inputs.run-build-test || inputs.pre-build-command != ''
+        run: npm ci
+
+      - name: Build & Test
+        if: inputs.run-build-test
+        run: |
+          npm run build:prod
+          npm run prepare-it-tests --if-present
+          npm run test:all
+
+      - name: Trivy vulnerability scan
+        # Gate, not remediation: findings fail the build; renovate is NOT
+        # dispatched (the weekly dep pass and the vuln scan own that).
+        if: inputs.run-trivy-scan
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          scan-type: "fs"
+          scan-ref: .
+          exit-code: "1"
+          severity: ${{ inputs.scan-severity }}
+          ignore-unfixed: true
+
+      - name: Pre-build
+        if: inputs.pre-build-command != ''
+        run: ${{ inputs.pre-build-command }}
+
       - name: Determine version and tags
         id: meta
         env:
@@ -94,6 +157,7 @@ jobs:
           IMAGE: ${{ inputs.image }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           FLOATING_TAG: ${{ inputs.floating-tag }}
+          REGISTRIES: ${{ inputs.registries }}
         run: |
           if [ -n "$VERSION_TAG" ]; then
             VERSION="$VERSION_TAG"
@@ -105,32 +169,36 @@ jobs:
           echo "version: $VERSION"
           {
             echo "tags<<TAGS_EOF"
-            echo "ghcr.io/${IMAGE}:${TAG_PREFIX}${VERSION}"
-            if [ -n "$FLOATING_TAG" ]; then
-              echo "ghcr.io/${IMAGE}:${TAG_PREFIX}${FLOATING_TAG}"
-            fi
+            IFS=',' read -ra REGS <<< "$REGISTRIES"
+            for reg in "${REGS[@]}"; do
+              reg=$(echo "$reg" | xargs)
+              echo "${reg}/${IMAGE}:${TAG_PREFIX}${VERSION}"
+              if [ -n "$FLOATING_TAG" ]; then
+                echo "${reg}/${IMAGE}:${TAG_PREFIX}${FLOATING_TAG}"
+              fi
+            done
             echo "TAGS_EOF"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Pre-build
-        if: inputs.pre-build-command != ''
-        run: ${{ inputs.pre-build-command }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to ghcr.io
+      - name: Login to registries
         if: inputs.push
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ inputs.registry-user }}
-          password: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
+        env:
+          REGISTRIES: ${{ inputs.registries }}
+          REGISTRY_USER: ${{ inputs.registry-user }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_TOKEN || secrets.GH_PAT || secrets.GH_TOKEN }}
+        run: |
+          IFS=',' read -ra REGS <<< "$REGISTRIES"
+          for reg in "${REGS[@]}"; do
+            reg=$(echo "$reg" | xargs)
+            echo "logging in to $reg as $REGISTRY_USER"
+            echo "$REGISTRY_PASSWORD" | docker login "$reg" -u "$REGISTRY_USER" --password-stdin
+          done
 
       - name: Build (and push) image
         uses: docker/build-push-action@v6
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
@@ -138,4 +206,6 @@ jobs:
           push: ${{ inputs.push }}
           no-cache: ${{ inputs.no-cache }}
           tags: ${{ steps.meta.outputs.tags }}
-          secrets: ${{ inputs.mount-npm-token && 'TOKEN=NPM_TOKEN' || '' }}
+          secrets: TOKEN=${{ secrets.NPM_TOKEN }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
