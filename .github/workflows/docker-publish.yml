@@ -1,0 +1,141 @@
+name: "Docker Build & Publish"
+
+# Reusable docker image build/publish, versatile enough for any image the
+# decaf-ts modules produce: custom image name, Dockerfile and context, tag
+# prefix (e.g. base-, paperclip-, contract-) and floating alias, optional
+# npm-token build secret (mounted as secret id=TOKEN for private-package
+# installs inside the image), optional pre-build command, multi-platform.
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: "Image path under ghcr.io (e.g. decaf-ts/couchdb, decaf-ts/with-ai)."
+        type: string
+        required: true
+      dockerfile:
+        description: "Path to the Dockerfile to build."
+        type: string
+        required: false
+        default: "Dockerfile"
+      context:
+        description: "Build context directory."
+        type: string
+        required: false
+        default: "."
+      tag-prefix:
+        description: "Prefix for the versioned and floating tags (e.g. 'base-' produces name:base-1.2.3 / name:base-latest)."
+        type: string
+        required: false
+        default: ""
+      floating-tag:
+        description: "Alias tag pushed alongside the versioned one (e.g. 'latest'). Empty = no alias."
+        type: string
+        required: false
+        default: "latest"
+      version-tag:
+        description: "Explicit version for the versioned tag. Empty = read from package.json."
+        type: string
+        required: false
+        default: ""
+      push:
+        description: "Push the built image to the registry (false = build only)."
+        type: boolean
+        required: false
+        default: true
+      platforms:
+        description: "Platforms to build (buildx format, e.g. linux/amd64 or linux/amd64,linux/arm64)."
+        type: string
+        required: false
+        default: "linux/amd64"
+      mount-npm-token:
+        description: "Mount the repo's NPM_TOKEN secret into the build as secret id=TOKEN (for private-package installs inside the image)."
+        type: boolean
+        required: false
+        default: false
+      pre-build-command:
+        description: "Optional command run in the checked-out repo before docker build (e.g. contract compilation)."
+        type: string
+        required: false
+        default: ""
+      no-cache:
+        description: "Build with --no-cache."
+        type: boolean
+        required: false
+        default: false
+      registry-user:
+        description: "Username for the ghcr.io login."
+        type: string
+        required: false
+        default: "decaf-ts-admin"
+    secrets:
+      GH_PAT:
+        required: false
+      GH_TOKEN:
+        required: false
+      NPM_TOKEN:
+        required: false
+
+jobs:
+  docker:
+    name: Docker Build & Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine version and tags
+        id: meta
+        env:
+          VERSION_TAG: ${{ inputs.version-tag }}
+          IMAGE: ${{ inputs.image }}
+          TAG_PREFIX: ${{ inputs.tag-prefix }}
+          FLOATING_TAG: ${{ inputs.floating-tag }}
+        run: |
+          if [ -n "$VERSION_TAG" ]; then
+            VERSION="$VERSION_TAG"
+          elif [ -f package.json ]; then
+            VERSION=$(jq -r .version package.json)
+          else
+            VERSION="latest"
+          fi
+          echo "version: $VERSION"
+          {
+            echo "tags<<TAGS_EOF"
+            echo "ghcr.io/${IMAGE}:${TAG_PREFIX}${VERSION}"
+            if [ -n "$FLOATING_TAG" ]; then
+              echo "ghcr.io/${IMAGE}:${TAG_PREFIX}${FLOATING_TAG}"
+            fi
+            echo "TAGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Pre-build
+        if: inputs.pre-build-command != ''
+        run: ${{ inputs.pre-build-command }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to ghcr.io
+        if: inputs.push
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ inputs.registry-user }}
+          password: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
+
+      - name: Build (and push) image
+        uses: docker/build-push-action@v6
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          no-cache: ${{ inputs.no-cache }}
+          tags: ${{ steps.meta.outputs.tags }}
+          secrets: ${{ inputs.mount-npm-token && 'TOKEN=NPM_TOKEN' || '' }}

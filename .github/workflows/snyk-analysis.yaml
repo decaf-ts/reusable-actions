@@ -2,10 +2,17 @@ name: "Snyk Analysis"
 
 on:
   workflow_call:
+    inputs: &snyk-analysis-inputs
+      args:
+        description: "Extra snyk arguments (e.g. --severity-threshold=high). SARIF output is always enabled."
+        type: string
+        required: false
+        default: ""
     secrets:
       SNYK_TOKEN:
         required: false
   workflow_dispatch:
+    inputs: *snyk-analysis-inputs
 
 concurrency:
   group: snyk-analysis-${{ github.repository }}-${{ github.ref }}
@@ -32,7 +39,7 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --sarif-file-output=snyk.sarif
+          args: --sarif-file-output=snyk.sarif ${{ inputs.args }}
       - name: Upload result to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3
         with:

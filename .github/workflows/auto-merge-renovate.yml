@@ -3,10 +3,10 @@ name: "Auto Approve and Merge Renovate PRs"
 # Reusable bot-PR automation: waits until every OTHER status check on the PR
 # has passed (this workflow's own check runs are excluded - watching them from
 # the inside would never terminate), then approves the PR and merges it, so
-# renovate dependency-update PRs release without human interaction.
-# The caller MUST gate its job with an actor `if:` (renovate[bot]) - this
-# workflow trusts the caller's filter and approves whatever PR it is invoked
-# for.
+# renovate/dependabot dependency-update PRs release without human interaction.
+# The caller MUST gate its job with an actor `if:` (renovate[bot],
+# dependabot[bot]) - this workflow trusts the caller's filter and approves
+# whatever PR it is invoked for.
 
 on:
   workflow_call:
