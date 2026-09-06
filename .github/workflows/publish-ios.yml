@@ -1,0 +1,162 @@
+name: "Publish iOS (App Store Connect / TestFlight / GitHub Releases)"
+
+# Reusable workflow: publishes the iOS artifact. App Store Connect / TestFlight
+# requires a distribution signing identity and an App Store Connect API key; the
+# step is skipped when those secrets are absent. When signing is unavailable the
+# unsigned .app is still published as a GitHub Release so a device build can be
+# reproduced elsewhere.
+# Consumed by flipbored/.github/workflows/publish-ios.yml and
+# flipbored/.github/workflows/mobile-build.yml.
+on:
+  workflow_call:
+    inputs:
+      store_targets:
+        description: "Comma-separated store targets: app_store_connect, github_releases."
+        required: false
+        type: string
+        default: "app_store_connect,github_releases"
+      artifact_name:
+        description: "Name of the iOS build artifact to download and publish."
+        required: false
+        type: string
+        default: "flipbored-ios"
+      version_name:
+        description: "Version name used for the GitHub release tag."
+        required: false
+        type: string
+        default: "0.1.0"
+      release_tag:
+        description: "Git tag used for the GitHub Releases path. Defaults to v<version_name>-ios."
+        required: false
+        type: string
+        default: ""
+      scheme:
+        description: "Xcode scheme to archive/export."
+        required: false
+        type: string
+        default: "App"
+      export_method:
+        description: "Xcode export method (app-store-connect | ad-hoc | development)."
+        required: false
+        type: string
+        default: "app-store-connect"
+    secrets:
+      APPLE_DISTRIBUTION_CERTIFICATE_B64:
+        description: "Base64-encoded .p12 distribution certificate."
+        required: false
+      APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        description: "Apple Developer team ID."
+        required: false
+      APPLE_API_KEY:
+        description: "App Store Connect API key content (.p8)."
+        required: false
+      APPLE_API_KEY_ID:
+        required: false
+      APPLE_API_ISSUER:
+        required: false
+
+jobs:
+  publish-ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download iOS build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: artifacts
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v${{ inputs.version_name }}-ios" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import distribution certificate
+        if: ${{ env.APPLE_DISTRIBUTION_CERTIFICATE_B64 != '' }}
+        env:
+          APPLE_DISTRIBUTION_CERTIFICATE_B64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_B64 }}
+          APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ env.APPLE_DISTRIBUTION_CERTIFICATE_B64 }}
+          p12-password: ${{ env.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+
+      - name: Archive and export signed .ipa
+        if: ${{ env.APPLE_DISTRIBUTION_CERTIFICATE_B64 != '' }}
+        env:
+          APPLE_DISTRIBUTION_CERTIFICATE_B64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_B64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cd ios/App
+          cat > exportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>${{ inputs.export_method }}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -workspace App.xcworkspace -scheme ${{ inputs.scheme }} \
+            -configuration Release -archivePath build/App.xcarchive \
+            archive CODE_SIGNING_ALLOWED=YES
+          xcodebuild -exportArchive -archivePath build/App.xcarchive \
+            -exportOptionsPlist exportOptions.plist -exportPath build/export
+          echo "Exported IPA:"
+          ls -la build/export/
+
+      - name: Upload to App Store Connect via fastlane pilot
+        if: ${{ env.APPLE_API_KEY != '' && env.APPLE_DISTRIBUTION_CERTIFICATE_B64 != '' }}
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_DISTRIBUTION_CERTIFICATE_B64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_B64 }}
+        run: |
+          cd ios/App
+          mkdir -p fastlane
+          cat > fastlane/Appfile <<EOF
+          app_identifier("com.flipbored.reader")
+          EOF
+          cat > fastlane/Fastfile <<EOF
+          lane :upload do
+            pilot(
+              ipa: Dir.glob("build/export/*.ipa").first,
+              api_key: {
+                key_id: ENV["APPLE_API_KEY_ID"],
+                issuer_id: ENV["APPLE_API_ISSUER"],
+                key: ENV["APPLE_API_KEY"],
+                is_key_content: true
+              },
+              skip_submission: false,
+              skip_metadata: true,
+              skip_screenshots: true
+            )
+          end
+          EOF
+          gem install fastlane --no-document
+          fastlane upload --verbose
+
+      - name: Publish iOS artifact to GitHub Releases
+        if: ${{ contains(inputs.store_targets, 'github_releases') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "flipbored iOS ${{ inputs.version_name }}"
+          body: "iOS build artifact for flipbored ${{ inputs.version_name }}. Signing required before App Store submission."
+          files: |
+            artifacts/**/*.app
+            ios/App/build/export/*.ipa
+          generate_release_notes: false

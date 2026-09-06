@@ -1,0 +1,74 @@
+name: "Build iOS (Capacitor)"
+
+# Reusable workflow: builds the flipbored Capacitor web shell and an unsigned
+# iOS .app bundle on a macOS runner. Signing is intentionally left to the store
+# publish step so the CI build never needs a distribution certificate.
+# Consumed by flipbored/.github/workflows/build-ios.yml and
+# flipbored/.github/workflows/mobile-build.yml.
+on:
+  workflow_call:
+    inputs:
+      configuration:
+        description: "Xcode configuration (Debug | Release)."
+        required: false
+        type: string
+        default: "Debug"
+      code_signing_allowed:
+        description: "Whether to allow code signing during the xcodebuild step."
+        required: false
+        type: boolean
+        default: false
+      node_version:
+        description: "Node version used to build the web shell."
+        required: false
+        type: string
+        default: "20"
+      upload_artifacts:
+        description: "Whether to upload the build artifacts."
+        required: false
+        type: boolean
+        default: true
+      artifact_name:
+        description: "Name of the uploaded artifact."
+        required: false
+        type: string
+        default: "flipbored-ios"
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web shell
+        run: npm run web:build
+
+      - name: Sync Capacitor
+        run: npx cap sync ios
+
+      - name: Build unsigned app bundle
+        working-directory: ios/App
+        run: |
+          xcodebuild \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration ${{ inputs.configuration }} \
+            -sdk iphonesimulator \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=${{ inputs.code_signing_allowed }} \
+            build
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.upload_artifacts }}
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ios/App/build/**/*.app
+          if-no-files-found: error

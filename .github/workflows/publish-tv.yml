@@ -1,0 +1,108 @@
+name: "Publish Android TV / leanback (Google Play / F-Droid / GitHub Releases)"
+
+# Reusable workflow: publishes the Android TV / leanback build artifact. Same
+# store-target model as publish-android, but scoped to the TV artifact and
+# audience (Google Play TV, F-Droid, GitHub Releases). Each store is
+# independently credential-gated.
+# Consumed by flipbored/.github/workflows/publish-tv.yml and
+# flipbored/.github/workflows/mobile-build.yml.
+on:
+  workflow_call:
+    inputs:
+      store_targets:
+        description: "Comma-separated store targets: google_play, fdroid, github_releases."
+        required: false
+        type: string
+        default: "google_play,fdroid,github_releases"
+      app_id:
+        description: "Android applicationId of the TV target."
+        required: false
+        type: string
+        default: "com.flipbored.reader"
+      version_name:
+        description: "Human-readable version name."
+        required: false
+        type: string
+        default: "0.1.0"
+      version_code:
+        description: "Android versionCode."
+        required: false
+        type: string
+        default: "1"
+      artifact_name:
+        description: "Name of the TV build artifact to download and publish."
+        required: false
+        type: string
+        default: "flipbored-android-tv"
+      release_tag:
+        description: "Git tag used for the GitHub Releases path. Defaults to v<version_name>-tv."
+        required: false
+        type: string
+        default: ""
+      fdroid_repo:
+        description: "Public git URL that F-Droid uses as the app's build repo."
+        required: false
+        type: string
+        default: "https://github.com/decaf-ts/flipbored"
+      fdroid_commit:
+        description: "Git ref F-Droid builds from."
+        required: false
+        type: string
+        default: "master"
+    secrets:
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:
+        required: false
+      FDROID_APPCATEGORY:
+        required: false
+
+jobs:
+  publish-tv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Android TV build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: artifacts
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v${{ inputs.version_name }}-tv" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload to Google Play (TV)
+        if: ${{ contains(inputs.store_targets, 'google_play') && env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJson: ${{ env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ inputs.app_id }}
+          releaseFiles: artifacts/**/*.aab
+          track: production
+          inAppUpdatePriority: 0
+          status: completed
+
+      - name: Publish TV APK to GitHub Releases
+        if: ${{ contains(inputs.store_targets, 'github_releases') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "flipbored TV ${{ inputs.version_name }}"
+          body: "Android TV / leanback artifact for flipbored ${{ inputs.version_name }} (versionCode ${{ inputs.version_code }})."
+          files: artifacts/**/*.apk
+          generate_release_notes: false
+
+      - name: Upload TV APK to F-Droid index
+        if: ${{ contains(inputs.store_targets, 'fdroid') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fdroid-tv-apk
+          path: artifacts/**/*.apk
+          if-no-files-found: error

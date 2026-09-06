@@ -1,0 +1,167 @@
+name: "Build Android (Capacitor)"
+
+# Reusable workflow: builds the flipbored Capacitor web shell and the Android
+# APK/AAB from a single Angular reader shell. Signing is optional and driven
+# purely by workflow secrets so the repository source never carries a keystore.
+# Consumed by flipbored/.github/workflows/build-android.yml and
+# flipbored/.github/workflows/mobile-build.yml.
+on:
+  workflow_call:
+    inputs:
+      build_type:
+        description: "Android build type to assemble (debug | release)."
+        required: false
+        type: string
+        default: "debug"
+      signing_enabled:
+        description: "Whether to configure release signing from workflow secrets."
+        required: false
+        type: boolean
+        default: false
+      node_version:
+        description: "Node version used to build the web shell."
+        required: false
+        type: string
+        default: "20"
+      java_version:
+        description: "Java version used by the Android Gradle build."
+        required: false
+        type: string
+        default: "21"
+      upload_artifacts:
+        description: "Whether to upload the build artifacts."
+        required: false
+        type: boolean
+        default: true
+      artifact_name:
+        description: "Name of the uploaded artifact."
+        required: false
+        type: string
+        default: "flipbored-android"
+    secrets:
+      ANDROID_UPLOAD_KEYSTORE:
+        description: "Base64-encoded Android upload keystore (.keystore)."
+        required: false
+      ANDROID_UPLOAD_KEYSTORE_PASSWORD:
+        description: "Keystore password."
+        required: false
+      ANDROID_UPLOAD_KEY_ALIAS:
+        description: "Key alias inside the keystore."
+        required: false
+      ANDROID_UPLOAD_KEY_PASSWORD:
+        description: "Key password."
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web shell
+        run: npm run web:build
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Accept Android SDK licenses
+        working-directory: android
+        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+      - name: Recover upload keystore from secret
+        if: ${{ inputs.signing_enabled }}
+        env:
+          ANDROID_UPLOAD_KEYSTORE: ${{ secrets.ANDROID_UPLOAD_KEYSTORE }}
+        run: |
+          if [ -n "$ANDROID_UPLOAD_KEYSTORE" ]; then
+            echo "$ANDROID_UPLOAD_KEYSTORE" | base64 -d > android/flipbored-upload.keystore
+            echo "keystore recovered at android/flipbored-upload.keystore"
+          else
+            echo "ANDROID_UPLOAD_KEYSTORE secret is empty; release signing will not be configured"
+          fi
+
+      - name: Write Gradle release-signing init script
+        if: ${{ inputs.signing_enabled }}
+        env:
+          ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          ANDROID_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+        run: |
+          cat > android/signing.init.gradle <<'EOF'
+          gradle.beforeProject { project ->
+            if (project.path == ":app") {
+              project.plugins.withId("com.android.application") {
+                android {
+                  signingConfigs {
+                    create("release") {
+                      storeFile file(System.getenv("ANDROID_UPLOAD_KEYSTORE_FILE"))
+                      storePassword System.getenv("ANDROID_UPLOAD_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("ANDROID_UPLOAD_KEY_ALIAS")
+                      keyPassword System.getenv("ANDROID_UPLOAD_KEY_PASSWORD")
+                    }
+                  }
+                  buildTypes {
+                    release {
+                      signingConfig signingConfigs.getByName("release")
+                    }
+                  }
+                }
+              }
+            }
+          }
+          EOF
+          {
+            echo "ANDROID_UPLOAD_KEYSTORE_FILE=${GITHUB_WORKSPACE}/android/flipbored-upload.keystore"
+            echo "ANDROID_UPLOAD_KEYSTORE_PASSWORD=${ANDROID_UPLOAD_KEYSTORE_PASSWORD}"
+            echo "ANDROID_UPLOAD_KEY_ALIAS=${ANDROID_UPLOAD_KEY_ALIAS}"
+            echo "ANDROID_UPLOAD_KEY_PASSWORD=${ANDROID_UPLOAD_KEY_PASSWORD}"
+            echo "GRADLE_SIGNING_INIT_SCRIPT=-I ${GITHUB_WORKSPACE}/android/signing.init.gradle"
+          } >> "$GITHUB_ENV"
+          echo "signing.init.gradle written"
+
+      - name: Build ${{ inputs.build_type }} APK
+        working-directory: android
+        run: ./gradlew $GRADLE_SIGNING_INIT_SCRIPT :app:assemble${{ inputs.build_type }} --no-daemon
+        env:
+          ANDROID_UPLOAD_KEYSTORE_FILE: ${{ env.ANDROID_UPLOAD_KEYSTORE_FILE }}
+          ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          ANDROID_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+
+      - name: Build release AAB
+        working-directory: android
+        run: ./gradlew $GRADLE_SIGNING_INIT_SCRIPT :app:bundleRelease --no-daemon
+        env:
+          ANDROID_UPLOAD_KEYSTORE_FILE: ${{ env.ANDROID_UPLOAD_KEYSTORE_FILE }}
+          ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          ANDROID_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.upload_artifacts }}
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: |
+            android/app/build/outputs/apk/**/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+
+      - name: Run Android unit tests
+        if: ${{ inputs.build_type == 'debug' }}
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
