@@ -4,13 +4,16 @@ on:
   workflow_call:
     inputs:
       node_version:
-        description: "Node.js version used by the workflow."
+        description: "Node.js version used by the workflow (must be >=22.14 for npm trusted publishing)."
         required: false
         type: string
         default: "24"
-    secrets:
-      NPM_TOKEN:
+      staged-publishing:
+        description: "Stage the npm package for approval instead of publishing it directly. Defaults to false."
         required: false
+        type: boolean
+        default: false
+    secrets:
       CONSECUTIVE_ACTION_TRIGGER:
         required: false
       GH_PAT:
@@ -20,10 +23,20 @@ on:
   workflow_dispatch:
     inputs:
       node_version:
-        description: "Node.js version used by the workflow."
+        description: "Node.js version used by the workflow (must be >=22.14 for npm trusted publishing)."
         required: false
         type: string
         default: "24"
+      staged-publishing:
+        description: "Stage the npm package for approval instead of publishing it directly. Defaults to false."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: read
+  id-token: write
 
 jobs:
   build:
@@ -37,35 +50,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Use Node.js ${{ inputs.node_version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node_version }}
           registry-url: https://registry.npmjs.org/
-      - name: Cache dependencies
-        id: cache-npm
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.npm
-            node_modules
-          key: deps-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            deps-${{ runner.os }}-${{ inputs.node_version }}-
+          package-manager-cache: false
+      - name: Set npm version for trusted publishing
+        run: npm install --global npm@11.15.0
       - run: npm ci
-      - name: Cache Build
-        id: cache-build
-        uses: actions/cache@v4
-        with:
-          path: |
-            lib
-            dist
-          key: build-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            build-${{ runner.os }}-${{ inputs.node_version }}-
-      - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
-        run: npm run build:prod
+      - run: npm run build:prod
       - name: Login to GitHub Container Registry
         env:
           REGISTRY_PAT: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
@@ -97,11 +92,10 @@ jobs:
           if [[ -n "${{ steps.publish-config.outputs.tag }}" ]]; then
             TAG_FLAG="--tag ${{ steps.publish-config.outputs.tag }}"
           fi
-          npm publish --access "$ACCESS" $TAG_FLAG
+          if [[ "${{ inputs.staged-publishing }}" == "true" ]]; then
+            npm stage publish --access "$ACCESS" $TAG_FLAG
+          else
+            npm publish --access "$ACCESS" $TAG_FLAG
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.CONSECUTIVE_ACTION_TRIGGER || secrets.GH_PAT || secrets.GH_TOKEN }}
-          # NODE_AUTH_TOKEN is read by the .npmrc that setup-node generates from
-          # `registry-url`; NPM_TOKEN covers repos that ship a committed .npmrc
-          # reading ${NPM_TOKEN} directly.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
