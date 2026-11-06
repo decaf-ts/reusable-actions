@@ -34,6 +34,11 @@ on:
         type: string
         required: false
         default: "high"
+      snyk-fail-on:
+        description: "When Snyk should fail the release gate: all, upgradable, or patchable. Defaults to upgradable."
+        type: string
+        required: false
+        default: upgradable
       strict-out-of-sync:
         description: "Require the npm lockfile to match package.json during Snyk scans."
         type: boolean
@@ -88,7 +93,7 @@ jobs:
         if: inputs.run-security-scans != false && env.SNYK_TOKEN != ''
         uses: snyk/actions/node@master
         with:
-          args: --severity-threshold=${{ inputs.snyk-severity-threshold }} --sarif-file-output=snyk.sarif --strict-out-of-sync=${{ inputs.strict-out-of-sync }}
+          args: --severity-threshold=${{ inputs.snyk-severity-threshold }} --fail-on=${{ inputs.snyk-fail-on }} --sarif-file-output=snyk.sarif --strict-out-of-sync=${{ inputs.strict-out-of-sync }}
 
       - name: Upload snyk result to GitHub Code Scanning
         if: always() && inputs.run-security-scans != false && env.SNYK_TOKEN != ''
