@@ -34,6 +34,11 @@ on:
         type: string
         required: false
         default: "high"
+      strict-out-of-sync:
+        description: "Require the npm lockfile to match package.json during Snyk scans."
+        type: boolean
+        required: false
+        default: true
     secrets:
       GH_PAT:
         required: false
@@ -83,7 +88,7 @@ jobs:
         if: inputs.run-security-scans != false && env.SNYK_TOKEN != ''
         uses: snyk/actions/node@master
         with:
-          args: --severity-threshold=${{ inputs.snyk-severity-threshold }} --sarif-file-output=snyk.sarif
+          args: --severity-threshold=${{ inputs.snyk-severity-threshold }} --sarif-file-output=snyk.sarif --strict-out-of-sync=${{ inputs.strict-out-of-sync }}
 
       - name: Upload snyk result to GitHub Code Scanning
         if: always() && inputs.run-security-scans != false && env.SNYK_TOKEN != ''
