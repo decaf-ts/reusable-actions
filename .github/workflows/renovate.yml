@@ -28,6 +28,11 @@ on:
         type: string
         required: false
         default: "HIGH,CRITICAL"
+      node_version:
+        description: "Node.js version used by the workflow."
+        type: string
+        required: false
+        default: "24"
     secrets:
       RENOVATE_TOKEN:
         required: false
@@ -49,6 +54,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_BRANCH }}
+      - name: Use Node.js ${{ inputs.node_version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
 
       - name: Clear stale overrides
         if: inputs.clear-stale-overrides == true

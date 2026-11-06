@@ -24,7 +24,7 @@ on:
         description: "Node version used to build the web shell."
         required: false
         type: string
-        default: "20"
+        default: "24"
       java_version:
         description: "Java version used by the Android Gradle build."
         required: false

@@ -9,6 +9,11 @@ name: "Release on Tag"
 on:
   workflow_call:
     inputs: &release-on-tag-inputs
+      node_version:
+        description: "Node.js version used by the workflow."
+        type: string
+        required: false
+        default: "24"
       run-security-scans:
         description: "Run the snyk + trivy release gates before creating the GitHub Release. A failing gate blocks the release (and therefore the npm publish)."
         type: boolean
@@ -47,9 +52,6 @@ jobs:
   # [skip ci] before any job would even start.
   deploy:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [22]
     permissions:
       contents: write
       security-events: write
@@ -58,10 +60,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Use Node.js ${{ matrix.node-version }}
+      - name: Use Node.js ${{ inputs.node_version }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ inputs.node_version }}
 
       # ------------------------------------------------------------------
       # Release gates: any failure below blocks the Release and the publish.

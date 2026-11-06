@@ -22,7 +22,7 @@ on:
         description: "Node version used to build the web shell."
         required: false
         type: string
-        default: "20"
+        default: "24"
       upload_artifacts:
         description: "Whether to upload the build artifacts."
         required: false

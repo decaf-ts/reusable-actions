@@ -2,7 +2,19 @@ name: 'Test Coverage'
 
 on:
   workflow_call:
+    inputs:
+      node_version:
+        description: "Node.js version used by the workflow."
+        required: false
+        type: string
+        default: "24"
   workflow_dispatch:
+    inputs:
+      node_version:
+        description: "Node.js version used by the workflow."
+        required: false
+        type: string
+        default: "24"
 
 concurrency:
   group: jest-coverage-${{ github.repository }}-${{ github.ref }}
@@ -11,19 +23,16 @@ concurrency:
 jobs:
   coverage:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [22]
     # No explicit skip-CI check needed: GitHub natively skips push/pull_request runs
     # whose commit message ends with [skip ci] before any job would even start.
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Use Node.js ${{ matrix.node-version }}
+      - name: Use Node.js ${{ inputs.node_version }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ inputs.node_version }}
 
       - name: Cache dependencies
         id: cache-npm
@@ -32,9 +41,9 @@ jobs:
           path: |
             ~/.npm
             node_modules
-          key: deps-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
+          key: deps-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
-            deps-${{ runner.os }}-${{ matrix.node-version }}-
+            deps-${{ runner.os }}-${{ inputs.node_version }}-
 
       - run: npm ci
 
@@ -45,9 +54,9 @@ jobs:
           path: |
             lib
             dist
-          key: build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
+          key: build-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
-            build-${{ runner.os }}-${{ matrix.node-version }}-
+            build-${{ runner.os }}-${{ inputs.node_version }}-
 
       - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
         run: npm run build:prod

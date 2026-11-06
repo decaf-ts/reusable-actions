@@ -11,6 +11,11 @@ name: "Docker Build & Publish"
 on:
   workflow_call:
     inputs:
+      node_version:
+        description: "Node.js version used for optional build and test steps."
+        type: string
+        required: false
+        default: "24"
       image:
         description: "Image path under each registry (e.g. decaf-ts/couchdb, decaf-ts/with-ai)."
         type: string
@@ -110,7 +115,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ inputs.node_version }}
 
       - name: Cache dependencies
         if: inputs.run-build-test || inputs.pre-build-command != ''

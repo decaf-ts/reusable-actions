@@ -2,7 +2,19 @@ name: "Pages Builder"
 
 on:
   workflow_call:
+    inputs:
+      node_version:
+        description: "Node.js version used by the workflow."
+        required: false
+        type: string
+        default: "24"
   workflow_dispatch:
+    inputs:
+      node_version:
+        description: "Node.js version used by the workflow."
+        required: false
+        type: string
+        default: "24"
 
 concurrency:
   group: pages-${{ github.repository }}
@@ -20,19 +32,16 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    strategy:
-      matrix:
-        node-version: [22]
     environment:
       name: github-pages
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Use Node.js ${{ matrix.node-version }}
+      - name: Use Node.js ${{ inputs.node_version }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ inputs.node_version }}
       - name: Cache dependencies
         id: cache-npm
         uses: actions/cache@v4
@@ -40,9 +49,9 @@ jobs:
           path: |
             ~/.npm
             node_modules
-          key: deps-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
+          key: deps-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
-            deps-${{ runner.os }}-${{ matrix.node-version }}-
+            deps-${{ runner.os }}-${{ inputs.node_version }}-
       - run: npm ci
       - name: Cache Build
         id: cache-build
@@ -51,9 +60,9 @@ jobs:
           path: |
             lib
             dist
-          key: build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
+          key: build-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
-            build-${{ runner.os }}-${{ matrix.node-version }}-
+            build-${{ runner.os }}-${{ inputs.node_version }}-
       - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
         run: npm run build:prod
       - name: Login to GitHub Container Registry

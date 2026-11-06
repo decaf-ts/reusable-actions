@@ -2,7 +2,19 @@ name: "Build & Test"
 
 on:
   workflow_call:
+    inputs:
+      node_version:
+        description: "Node.js version used by the workflow."
+        required: false
+        type: string
+        default: "24"
   workflow_dispatch:
+    inputs:
+      node_version:
+        description: "Node.js version used by the workflow."
+        required: false
+        type: string
+        default: "24"
 
 concurrency:
   group: nodejs-build-prod-${{ github.repository }}-${{ github.ref }}
@@ -10,9 +22,6 @@ concurrency:
 
 jobs:
   test:
-    strategy:
-      matrix:
-        node-version: [22]
     runs-on: ubuntu-latest
     # No explicit skip-CI check needed: GitHub natively skips push/pull_request runs
     # whose commit message ends with [skip ci] before any job would even start.
@@ -21,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ inputs.node_version }}
 
       - name: Cache dependencies
         id: cache-npm
@@ -30,9 +39,9 @@ jobs:
           path: |
             ~/.npm
             node_modules
-          key: deps-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
+          key: deps-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
-            deps-${{ runner.os }}-${{ matrix.node-version }}-
+            deps-${{ runner.os }}-${{ inputs.node_version }}-
 
       - run: npm ci
 
@@ -43,9 +52,9 @@ jobs:
           path: |
             lib
             dist
-          key: build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
+          key: build-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
-            build-${{ runner.os }}-${{ matrix.node-version }}-
+            build-${{ runner.os }}-${{ inputs.node_version }}-
 
       - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
         run: npm run build:prod
