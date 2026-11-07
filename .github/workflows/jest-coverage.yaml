@@ -23,58 +23,25 @@ concurrency:
 jobs:
   coverage:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
     # No explicit skip-CI check needed: GitHub natively skips push/pull_request runs
     # whose commit message ends with [skip ci] before any job would even start.
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Use Node.js ${{ inputs.node_version }}
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: decaf-ts/reusable-actions/actions/node-setup@aa34eca0d138e6e6c7710fe91ae856d6616504bb
         with:
           node-version: ${{ inputs.node_version }}
-
-      - name: Cache dependencies
-        id: cache-npm
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.npm
-            node_modules
-          key: deps-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            deps-${{ runner.os }}-${{ inputs.node_version }}-
-
-      - run: npm ci
-
-      - name: Cache Build
-        id: cache-build
-        uses: actions/cache@v4
-        with:
-          path: |
-            lib
-            dist
-          key: build-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            build-${{ runner.os }}-${{ inputs.node_version }}-
-
-      - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
-        run: npm run build:prod
-
-      - name: Login to GitHub Container Registry
-        env:
-          REGISTRY_PAT: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
-        run: |
-          if [ -n "$REGISTRY_PAT" ]; then
-            echo "$REGISTRY_PAT" | docker login ghcr.io -u decaf-ts-admin --password-stdin
-          else
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          fi
 
       - name: Prepare integration-test infra
         run: npm run prepare-it-tests --if-present
 
+      - run: npm run build:prod
+
       - run: npm run coverage
+
       - name: Tests ✅
         if: ${{ success() }}
         run: |
@@ -94,7 +61,7 @@ jobs:
             "target_url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           }'
 
-      - uses: artiomtr/jest-coverage-report-action@v2.0-rc.1
+      - uses: artiomtr/jest-coverage-report-action@4dc36674845c313bdc120cb46e89b358d0f88a00 # v2.0-rc.1
         # The report action only supports pull_request events; skip it on
         # workflow_dispatch runs so manual dispatches don't fail the job.
         if: github.event_name == 'pull_request'

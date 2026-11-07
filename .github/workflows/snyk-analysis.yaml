@@ -41,16 +41,19 @@ jobs:
     # push is required so tag-push releases actually get scanned (the caller's
     # push trigger is tag-only).
     if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Run Snyk to check for vulnerabilities
-        uses: snyk/actions/node@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        uses: decaf-ts/reusable-actions/actions/snyk-gate@aa34eca0d138e6e6c7710fe91ae856d6616504bb
         with:
-          args: --sarif-file-output=snyk.sarif --strict-out-of-sync=${{ inputs.strict-out-of-sync }} ${{ inputs.args }} --fail-on=${{ inputs.snyk-fail-on }}
+          fail: "false"
+          args: ${{ inputs.args }}
+          fail-on: ${{ inputs.snyk-fail-on }}
+          strict-out-of-sync: ${{ inputs.strict-out-of-sync }}
+          sarif-file: snyk.sarif
       - name: Upload result to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@192325c86100d080feab897ff886c34abd4c83a3 # v3.30.3
         with:
           sarif_file: snyk.sarif

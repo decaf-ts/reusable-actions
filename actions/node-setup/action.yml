@@ -1,0 +1,61 @@
+name: "Node setup"
+description: "Checkout the caller repository, configure Node.js with the built-in npm cache, and optionally install dependencies."
+
+inputs:
+  node-version:
+    description: "Node.js version to install."
+    required: false
+    default: "24"
+  install:
+    description: "Run `npm ci` after configuring Node.js."
+    required: false
+    default: "true"
+  ref:
+    description: "Git ref to check out. Defaults to the ref/SHA for the triggering event."
+    required: false
+    default: ""
+  fetch-depth:
+    description: "Number of commits to fetch (0 = full history and tags)."
+    required: false
+    default: "1"
+  token:
+    description: "Token used by actions/checkout. Defaults to github.token when empty."
+    required: false
+    default: ""
+  registry-url:
+    description: "Optional npm registry URL used to generate the checkout's .npmrc."
+    required: false
+    default: ""
+  cache-dependency-path:
+    description: "Lockfile glob used for the built-in npm cache key."
+    required: false
+    default: "**/package-lock.json"
+
+outputs:
+  cache-hit:
+    description: "Whether actions/setup-node restored an exact npm cache hit."
+    value: ${{ steps.setup-node.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+        token: ${{ inputs.token || github.token }}
+
+    - name: Use Node.js ${{ inputs.node-version }}
+      id: setup-node
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        registry-url: ${{ inputs.registry-url }}
+
+    - name: Install dependencies
+      if: ${{ inputs.install == 'true' }}
+      shell: bash
+      run: npm ci

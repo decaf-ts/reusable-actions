@@ -1,0 +1,28 @@
+name: "Renovate dispatch"
+description: "Dispatch the repository event that starts the Renovate security-remediation workflow."
+
+inputs:
+  event-type:
+    description: "repository_dispatch event type to send."
+    required: false
+    default: "renovate-trigger"
+  token:
+    description: "Token with contents:write. When empty the dispatch is skipped."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Dispatch ${{ inputs.event-type }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        EVENT_TYPE: ${{ inputs.event-type }}
+        REPO: ${{ github.repository }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "no GitHub token supplied; skipping $EVENT_TYPE dispatch"
+          exit 0
+        fi
+        gh api "repos/${REPO}/dispatches" -f event_type="$EVENT_TYPE"

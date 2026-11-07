@@ -36,56 +36,24 @@ jobs:
       name: github-pages
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Use Node.js ${{ inputs.node_version }}
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: decaf-ts/reusable-actions/actions/node-setup@aa34eca0d138e6e6c7710fe91ae856d6616504bb
         with:
           node-version: ${{ inputs.node_version }}
-      - name: Cache dependencies
-        id: cache-npm
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.npm
-            node_modules
-          key: deps-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            deps-${{ runner.os }}-${{ inputs.node_version }}-
-      - run: npm ci
-      - name: Cache Build
-        id: cache-build
-        uses: actions/cache@v4
-        with:
-          path: |
-            lib
-            dist
-          key: build-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            build-${{ runner.os }}-${{ inputs.node_version }}-
-      - if: ${{ steps.cache-build.outputs.cache-hit != 'true' }}
-        run: npm run build:prod
-      - name: Login to GitHub Container Registry
-        env:
-          REGISTRY_PAT: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
-        run: |
-          if [ -n "$REGISTRY_PAT" ]; then
-            echo "$REGISTRY_PAT" | docker login ghcr.io -u decaf-ts-admin --password-stdin
-          else
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          fi
+
+      - run: npm run build:prod
 
       - name: Prepare integration-test infra
         run: npm run prepare-it-tests --if-present
       - run: npm run coverage
       - run: npm run docs
       - name: Setup Pages
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           name: docs
           path: docs
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
         with:
           artifact_name: docs

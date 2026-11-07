@@ -54,6 +54,26 @@ on:
         required: false
         type: string
         default: "master"
+      app_name:
+        description: "Human-readable application name used in release and F-Droid metadata."
+        required: false
+        type: string
+        default: "flipbored"
+      fdroid_categories:
+        description: "F-Droid category for the generated metadata."
+        required: false
+        type: string
+        default: "News"
+      fdroid_summary:
+        description: "F-Droid summary line for the generated metadata."
+        required: false
+        type: string
+        default: "A universal RSS magazine reader built on the Decaf TypeScript ecosystem"
+      fdroid_index_repo:
+        description: "Git URL of the fdroiddata index repo written by the F-Droid path."
+        required: false
+        type: string
+        default: "https://github.com/decaf-ts/flipbored-fdroiddata"
     secrets:
       GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:
         description: "Google Play service-account JSON used for the Play Upload API."
@@ -78,10 +98,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Download Android build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ inputs.artifact_name }}
           path: artifacts
@@ -101,7 +121,7 @@ jobs:
         if: ${{ contains(inputs.store_targets, 'google_play') && env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != '' }}
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJson: ${{ env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: ${{ inputs.app_id }}
@@ -113,12 +133,12 @@ jobs:
       # ---- GitHub Releases (alternative store path: direct APK/AAB distribution) ----
       - name: Publish APK/AAB to GitHub Releases
         if: ${{ contains(inputs.store_targets, 'github_releases') }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: "flipbored ${{ inputs.version_name }}"
+          name: "${{ inputs.app_name }} ${{ inputs.version_name }}"
           body: |
-            Android artifact for flipbored ${{ inputs.version_name }} (versionCode ${{ inputs.version_code }}).
+            Android artifact for ${{ inputs.app_name }} ${{ inputs.version_name }} (versionCode ${{ inputs.version_code }}).
 
             - APK and AAB built from the mobile CI pipeline.
             - F-Droid metadata is included in the `fdroiddata-metadata` artifact.
@@ -143,18 +163,18 @@ jobs:
           # fdroiddata repository configuration for the flipbored build.
           # The binary repo is written to `repo/` and indexed by `fdroid update`.
           gpg_disable: true
-          repo_url: https://github.com/decaf-ts/flipbored-fdroiddata
+          repo_url: ${{ inputs.fdroid_index_repo }}
           EOF
           cat > fdroiddata/metadata/${{ inputs.app_id }}.yml <<EOF
           Categories:
-            - News
+            - ${{ inputs.fdroid_categories }}
           License:
             - MIT
-          Name: flipbored
+          Name: ${{ inputs.app_name }}
           Web: ${{ inputs.fdroid_repo }}
           SourceCode: ${{ inputs.fdroid_repo }}
           IssueTracker: ${{ inputs.fdroid_repo }}/issues
-          Summary: A universal RSS magazine reader built on the Decaf TypeScript ecosystem
+          Summary: ${{ inputs.fdroid_summary }}
           Repo: ${{ inputs.fdroid_repo }}
 
           AutoUpdateMode: Version
@@ -189,7 +209,7 @@ jobs:
 
       - name: Upload fdroiddata metadata artifact
         if: ${{ contains(inputs.store_targets, 'fdroid') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fdroiddata-metadata
           path: |
@@ -207,5 +227,5 @@ jobs:
           git init
           git remote add origin "${FDROID_FDROIDDATA_REPO}"
           git add metadata/ config.yml repo/ || true
-          git commit -m "flipbored ${{ inputs.version_name }} (versionCode ${{ inputs.version_code }}): F-Droid build" || true
+          git commit -m "${{ inputs.app_name }} ${{ inputs.version_name }} (versionCode ${{ inputs.version_code }}): F-Droid build" || true
           git push "https://x-access-token:${FDROID_FDROIDDATA_TOKEN}@${FDROID_FDROIDDATA_REPO#https://}" HEAD:master || true

@@ -4,21 +4,47 @@ name: "Auto Approve and Merge Renovate PRs"
 # has passed (this workflow's own check runs are excluded - watching them from
 # the inside would never terminate), then approves the PR and merges it, so
 # renovate/dependabot dependency-update PRs release without human interaction.
-# The caller MUST gate its job with an actor `if:` (renovate[bot],
-# dependabot[bot]) - this workflow trusts the caller's filter and approves
-# whatever PR it is invoked for.
+# The caller should still gate its job with an actor `if:`; the
+# `allowed-actors` input is a defense-in-depth check so a caller that forgets
+# its filter cannot auto-merge an arbitrary PR.
 
 on:
   workflow_call:
+    inputs:
+      allowed-actors:
+        description: "Comma-separated list of actors allowed to trigger an automatic merge."
+        required: false
+        type: string
+        default: "renovate[bot],dependabot[bot]"
     secrets:
       GH_PAT:
         required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
 
 jobs:
   wait-for-tests:
     name: Wait for Tests
     runs-on: ubuntu-latest
     steps:
+      - name: Check actor is allowed
+        env:
+          ACTOR: ${{ github.actor }}
+          ALLOWED_ACTORS: ${{ inputs.allowed-actors }}
+        run: |
+          case ",${ALLOWED_ACTORS}," in
+            *",${ACTOR},"*)
+              echo "actor ${ACTOR} is allowed to auto-merge"
+              ;;
+            *)
+              echo "::error::actor ${ACTOR} is not in allowed-actors (${ALLOWED_ACTORS})"
+              exit 1
+              ;;
+          esac
+
       - name: Wait for CI checks
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -31,7 +57,7 @@ jobs:
           # never terminate.
           for i in $(seq 1 60); do
             JSON=$(gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,bucket 2>/dev/null) || JSON="[]"
-            OTHERS=$(echo "$JSON" | jq 'map(select(.name != "Wait for Tests" and .name != "Auto Approve and Merge"))')
+            OTHERS=$(echo "$JSON" | jq 'map(select(.name != "Wait for Tests" and .name != "Auto Approve and Merge" and .name != "Check actor is allowed"))')
             N=$(echo "$OTHERS" | jq 'length')
             if [ "$N" -gt 0 ]; then
               FAILED=$(echo "$OTHERS" | jq '[.[] | select(.bucket == "fail")] | length')

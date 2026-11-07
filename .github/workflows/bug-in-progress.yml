@@ -18,6 +18,10 @@ jobs:
     permissions:
       contents: write
 
+    concurrency:
+      group: create-branch-${{ inputs.branch }}
+      cancel-in-progress: false
+
     steps:
       - name: Validate payload
         env:
@@ -29,7 +33,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: master
           fetch-depth: 0

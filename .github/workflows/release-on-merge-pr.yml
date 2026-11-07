@@ -30,61 +30,38 @@ jobs:
     runs-on: ubuntu-latest
     if: '!endsWith(github.event.pull_request.title, ''-no-ci'')'
     permissions:
-      actions: read
       contents: write
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: ["javascript"]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
-          fetch-depth: 0
-      - name: Use Node.js ${{ inputs.node_version }}
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: decaf-ts/reusable-actions/actions/node-setup@aa34eca0d138e6e6c7710fe91ae856d6616504bb
         with:
           node-version: ${{ inputs.node_version }}
+          fetch-depth: "0"
+          token: ${{ secrets.GH_PAT || secrets.GH_TOKEN || github.token }}
           registry-url: https://registry.npmjs.org/
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.npm
-            node_modules
-          key: deps-${{ runner.os }}-${{ inputs.node_version }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            deps-${{ runner.os }}-${{ inputs.node_version }}-
-      - name: Install dependencies
-        run: npm ci
+
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin https://decaf-ts-admin:${{ secrets.GH_PAT || secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git
+
       - name: Bump TAG
         run: npm version patch
+
       - name: Build
         run: npm run build:prod
-      - name: Login to GitHub Container Registry
-        env:
-          REGISTRY_PAT: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
-        run: |
-          if [ -n "$REGISTRY_PAT" ]; then
-            echo "$REGISTRY_PAT" | docker login ghcr.io -u decaf-ts-admin --password-stdin
-          else
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          fi
 
       - name: Prepare integration-test infra
         run: npm run prepare-it-tests --if-present
       - name: Test
         run: npm run coverage
       - name: Commit changes
+        env:
+          # The PAT is only ever used in this push URL, never written to .git/config.
+          TOKEN: ${{ secrets.GH_PAT || secrets.GH_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
         run: |
           TAG=$(git describe --tags --exact-match || echo "no-tag")
           git add .
           git commit -m "Github Action automatic release: ${TAG}" || echo "No changes to commit"
-          git push origin HEAD:master --follow-tags
+          git push "https://x-access-token:${TOKEN}@github.com/${REPO}.git" HEAD:master --follow-tags

@@ -49,6 +49,11 @@ on:
         required: false
         type: string
         default: "master"
+      app_name:
+        description: "Human-readable application name used in release names and bodies."
+        required: false
+        type: string
+        default: "flipbored"
     secrets:
       GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:
         required: false
@@ -59,10 +64,10 @@ jobs:
   publish-tv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Download Android TV build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ inputs.artifact_name }}
           path: artifacts
@@ -80,7 +85,7 @@ jobs:
         if: ${{ contains(inputs.store_targets, 'google_play') && env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != '' }}
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJson: ${{ env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: ${{ inputs.app_id }}
@@ -91,17 +96,17 @@ jobs:
 
       - name: Publish TV APK to GitHub Releases
         if: ${{ contains(inputs.store_targets, 'github_releases') }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: "flipbored TV ${{ inputs.version_name }}"
-          body: "Android TV / leanback artifact for flipbored ${{ inputs.version_name }} (versionCode ${{ inputs.version_code }})."
+          name: "${{ inputs.app_name }} TV ${{ inputs.version_name }}"
+          body: "Android TV / leanback artifact for ${{ inputs.app_name }} ${{ inputs.version_name }} (versionCode ${{ inputs.version_code }})."
           files: artifacts/**/*.apk
           generate_release_notes: false
 
       - name: Upload TV APK to F-Droid index
         if: ${{ contains(inputs.store_targets, 'fdroid') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fdroid-tv-apk
           path: artifacts/**/*.apk

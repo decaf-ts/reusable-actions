@@ -69,37 +69,48 @@ jobs:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Use Node.js ${{ inputs.node_version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
 
       # ------------------------------------------------------------------
       # Release gates: any failure below blocks the Release and the publish.
       # ------------------------------------------------------------------
       - name: Trivy release gate
         if: inputs.run-security-scans != false
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: decaf-ts/reusable-actions/actions/trivy-gate@aa34eca0d138e6e6c7710fe91ae856d6616504bb
         with:
           scan-type: "fs"
+          scan-ref: "."
           format: "table"
           exit-code: "1"
           severity: ${{ inputs.trivy-severity }}
           ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
+          cache-key-suffix: release
 
       - name: Snyk release gate
-        # skipped when the repo has no SNYK_TOKEN configured
+        # Snyk reads the npm manifest + lockfile directly; it does not require
+        # node_modules to be installed. --strict-out-of-sync=true therefore
+        # keeps the gate honest when package.json and package-lock.json drift
+        # (the step fails instead of scanning a stale dependency graph).
+        # Skipped when the repo has no SNYK_TOKEN configured.
         if: inputs.run-security-scans != false && env.SNYK_TOKEN != ''
-        uses: snyk/actions/node@master
+        uses: decaf-ts/reusable-actions/actions/snyk-gate@aa34eca0d138e6e6c7710fe91ae856d6616504bb
         with:
-          args: --severity-threshold=${{ inputs.snyk-severity-threshold }} --fail-on=${{ inputs.snyk-fail-on }} --sarif-file-output=snyk.sarif --strict-out-of-sync=${{ inputs.strict-out-of-sync }}
+          fail: "true"
+          severity-threshold: ${{ inputs.snyk-severity-threshold }}
+          fail-on: ${{ inputs.snyk-fail-on }}
+          strict-out-of-sync: ${{ inputs.strict-out-of-sync }}
 
       - name: Upload snyk result to GitHub Code Scanning
         if: always() && inputs.run-security-scans != false && env.SNYK_TOKEN != ''
         # reporting only -- must never block the release by itself
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@192325c86100d080feab897ff886c34abd4c83a3 # v3.30.3
         with:
           sarif_file: snyk.sarif
 
@@ -107,14 +118,10 @@ jobs:
         # open security-remediation PRs automatically when a gate blocks the release
         if: failure() && inputs.run-security-scans != false
         continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GH_TOKEN || secrets.CONSECUTIVE_ACTION_TRIGGER }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "no PAT configured; skipping renovate dispatch"
-            exit 0
-          fi
-          gh api "repos/${{ github.repository }}/dispatches" -f event_type=renovate-trigger || true
+        uses: decaf-ts/reusable-actions/actions/renovate-dispatch@aa34eca0d138e6e6c7710fe91ae856d6616504bb
+        with:
+          event-type: renovate-trigger
+          token: ${{ secrets.GH_PAT || secrets.GH_TOKEN || secrets.CONSECUTIVE_ACTION_TRIGGER }}
 
       # ------------------------------------------------------------------
       # Release creation
@@ -128,7 +135,7 @@ jobs:
         # authored by a real user. Releases created with the default GITHUB_TOKEN
         # do NOT fire the `release` event and would therefore never trigger
         # publish-on-release.
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           token: ${{ secrets.GH_PAT || secrets.GH_TOKEN || secrets.CONSECUTIVE_ACTION_TRIGGER }}
