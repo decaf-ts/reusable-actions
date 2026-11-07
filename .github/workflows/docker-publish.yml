@@ -143,7 +143,7 @@ jobs:
         # Gate, not remediation: findings fail the build; renovate is NOT
         # dispatched (the weekly dep pass and the vuln scan own that).
         if: inputs.run-trivy-scan
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "fs"
           scan-ref: .
