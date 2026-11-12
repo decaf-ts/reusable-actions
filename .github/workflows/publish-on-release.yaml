@@ -1,5 +1,31 @@
 name: "Publish on Release"
 
+# !! DO NOT RENAME THIS FILE -- AND DO NOT MOVE THE npm publish ELSEWHERE !!
+#
+# npm trusted publishing (OIDC) validates the CALLING workflow's filename, not
+# this reusable workflow's name. Every decaf-ts package is configured on npm as
+#
+#     organization: decaf-ts
+#     repository:   <package repo>
+#     workflow:     publish-on-release.yaml
+#
+# so each package repository keeps its OWN `.github/workflows/publish-on-release.yaml`
+# caller, triggered by the `release: published` event, which calls this workflow.
+# That is what keeps the trusted-publisher configuration unchanged. Moving the
+# `npm publish` step into release-on-tag.yaml / release-on-merge-pr.yml would
+# change the calling workflow's name and break the trusted publisher for every
+# package.
+#
+# `id-token: write` must be granted by BOTH the calling workflow and this one.
+#
+# The job owns the single release build/test so nothing is rebuilt downstream:
+#
+#   checkout -> npm ci -> build:prod -> test:all -> docs
+#     -> npm publish --provenance  (trusted publishing)
+#
+# The docs artifact is deployed by the `pages` job in this same run (artifact
+# handoff, no second build).
+
 on:
   workflow_call:
     inputs:
@@ -8,11 +34,21 @@ on:
         required: false
         type: string
         default: "24"
+      ref:
+        description: "Tag/ref to build and publish. Empty = use the triggering ref (the release tag)."
+        required: false
+        type: string
+        default: ""
       staged-publishing:
         description: "Stage the npm package for approval instead of publishing it directly. Defaults to false."
         required: false
         type: boolean
         default: false
+      deploy-docs:
+        description: "Generate the docs site and deploy it to GitHub Pages. Defaults to true."
+        required: false
+        type: boolean
+        default: true
     secrets:
       CONSECUTIVE_ACTION_TRIGGER:
         required: false
@@ -27,11 +63,21 @@ on:
         required: false
         type: string
         default: "24"
+      ref:
+        description: "Tag/ref to build and publish. Empty = use the triggering ref."
+        required: false
+        type: string
+        default: ""
       staged-publishing:
         description: "Stage the npm package for approval instead of publishing it directly. Defaults to false."
         required: false
         type: boolean
         default: false
+      deploy-docs:
+        description: "Generate the docs site and deploy it to GitHub Pages. Defaults to true."
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -39,41 +85,45 @@ permissions:
   id-token: write
 
 jobs:
-  build:
-    # release-on-tag.yaml sets the release body to the tag's commit message, so this
-    # can be checked from the event context alone -- no runner needs to start to skip.
-    # release events are never covered by GitHub's native skip-CI keywords, so this
-    # check is the only thing that catches it -- but tag-release.sh/ReleaseScript
-    # normalize whatever skip-CI flag a user typed to this one canonical flag before
-    # it's ever committed, so only this one needs checking.
-    if: '!endsWith(github.event.release.body, ''[skip ci]'')'
+  publish:
+    # release-on-tag.yaml sets the release body to the tag's commit message, so
+    # this can be checked from the event context alone. release events are never
+    # covered by GitHub's native skip-CI keywords, so this check is the only
+    # thing that catches it -- but tag-release.sh/ReleaseScript normalize
+    # whatever skip-CI flag a user typed to this one canonical flag before it is
+    # ever committed, so only this one needs checking.
+    if: github.event_name != 'release' || !endsWith(github.event.release.body || '', '[skip ci]')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-      - name: Use Node.js ${{ inputs.node_version }}
-        uses: actions/setup-node@v6
+      - name: Set up Node.js
+        uses: decaf-ts/reusable-actions/actions/node-setup@master
         with:
           node-version: ${{ inputs.node_version }}
+          ref: ${{ inputs.ref }}
           registry-url: https://registry.npmjs.org/
-          package-manager-cache: false
+
       - name: Set npm version for trusted publishing
         run: npm install --global npm@11.15.0
-      - run: npm ci
-      - run: npm run build:prod
-      - name: Login to GitHub Container Registry
-        env:
-          REGISTRY_PAT: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
-        run: |
-          if [ -n "$REGISTRY_PAT" ]; then
-            echo "$REGISTRY_PAT" | docker login ghcr.io -u decaf-ts-admin --password-stdin
-          else
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          fi
 
       - name: Prepare integration-test infra
         run: npm run prepare-it-tests --if-present
+
+      # Build and test exactly once for this release. Nothing downstream
+      # rebuilds: the docs come from this same job and the publish uses the
+      # build output produced here.
+      - run: npm run build:prod
       - run: npm run test:all
+
+      - name: Build docs
+        if: inputs.deploy-docs != false
+        run: npm run docs
+      - name: Upload docs artifact
+        if: inputs.deploy-docs != false
+        uses: actions/upload-pages-artifact@v5
+        with:
+          name: docs
+          path: docs
+
       - name: Resolve publish config
         id: publish-config
         run: |
@@ -86,6 +136,8 @@ jobs:
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${isPrerelease ? "prerelease" : ""}\n`);
           '
       - name: Publish
+        # Trusted publishing authenticates with the OIDC token granted by
+        # `id-token: write`; npm never reads GITHUB_TOKEN for the publish itself.
         run: |
           ACCESS="${{ steps.publish-config.outputs.access }}"
           TAG_FLAG=""
@@ -93,9 +145,26 @@ jobs:
             TAG_FLAG="--tag ${{ steps.publish-config.outputs.tag }}"
           fi
           if [[ "${{ inputs.staged-publishing }}" == "true" ]]; then
-            npm stage publish --access "$ACCESS" $TAG_FLAG
+            npm stage publish --access "$ACCESS" --provenance $TAG_FLAG
           else
-            npm publish --access "$ACCESS" $TAG_FLAG
+            npm publish --access "$ACCESS" --provenance $TAG_FLAG
           fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.CONSECUTIVE_ACTION_TRIGGER || secrets.GH_PAT || secrets.GH_TOKEN }}
+
+  # Deploy the docs artifact produced by the publish job. Separate job so the
+  # `github-pages` environment protection applies only to the deployment, never
+  # to the npm publish.
+  pages:
+    needs: publish
+    if: inputs.deploy-docs != false
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+        with:
+          artifact_name: docs

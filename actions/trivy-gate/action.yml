@@ -1,0 +1,68 @@
+name: "Trivy gate"
+description: "Run a Trivy filesystem scan with a cached vulnerability database and an optional failing exit code."
+
+inputs:
+  scan-type:
+    description: "Trivy scan type (fs, image, repo, ...)."
+    required: false
+    default: "fs"
+  scan-ref:
+    description: "Path or reference to scan."
+    required: false
+    default: "."
+  severity:
+    description: "Comma-separated Trivy severity filter."
+    required: false
+    default: "HIGH,CRITICAL"
+  exit-code:
+    description: "Trivy exit code when findings match (0 = report only, 1 = fail)."
+    required: false
+    default: "1"
+  format:
+    description: "Trivy output format (table, json, sarif, ...)."
+    required: false
+    default: "table"
+  output:
+    description: "Optional report output path. Empty writes to the log."
+    required: false
+    default: ""
+  ignore-unfixed:
+    description: "Ignore vulnerabilities without a known fix."
+    required: false
+    default: "true"
+  db-cache:
+    description: "Cache the Trivy vulnerability database between runs."
+    required: false
+    default: "true"
+  cache-key-suffix:
+    description: "Extra cache-key discriminator (for example a scan name)."
+    required: false
+    default: ""
+
+outputs:
+  report-path:
+    description: "Path of the generated report (empty when stdout is used)."
+    value: ${{ inputs.output }}
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Trivy database
+      if: ${{ inputs.db-cache == 'true' }}
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/trivy
+        key: trivy-db-${{ runner.os }}-${{ inputs.cache-key-suffix }}-${{ github.run_id }}
+        restore-keys: |
+          trivy-db-${{ runner.os }}-${{ inputs.cache-key-suffix }}-
+
+    - name: Trivy scan
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        scan-type: ${{ inputs.scan-type }}
+        scan-ref: ${{ inputs.scan-ref }}
+        severity: ${{ inputs.severity }}
+        exit-code: ${{ inputs.exit-code }}
+        format: ${{ inputs.format }}
+        output: ${{ inputs.output }}
+        ignore-unfixed: ${{ inputs.ignore-unfixed }}

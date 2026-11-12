@@ -1,12 +1,10 @@
 name: "Build Android TV / leanback (Capacitor)"
 
-# Reusable workflow: builds the flipbored Capacitor web shell plus a distinct
-# Android TV / leanback target. Android TV is treated as a first-class target:
-# the manifest is prepared for a non-touch D-pad/leanback device and the output
-# is uploaded under a TV-specific artifact name so TV artifacts are never
-# confused with the phone/tablet build.
-# Consumed by flipbored/.github/workflows/build-tv.yml and
-# flipbored/.github/workflows/mobile-build.yml.
+# Reusable workflow: builds a Capacitor web shell plus a distinct Android TV /
+# leanback target. The shared capacitor-android-build composite performs the
+# build; this workflow only turns on the TV manifest patch and the TV artifact
+# name so TV artifacts are never confused with the phone/tablet build.
+# Consumed by flipbored/.github/workflows/build-tv.yml and mobile-build.yml.
 on:
   workflow_call:
     inputs:
@@ -40,9 +38,14 @@ on:
         required: false
         type: string
         default: "flipbored-android-tv"
+      web_build_command:
+        description: "Command that builds the Capacitor web shell."
+        required: false
+        type: string
+        default: "npm run web:build"
     secrets:
       ANDROID_UPLOAD_KEYSTORE:
-        description: "Base64-encoded Android upload keystore (.keystore)."
+        description: "Accepted for caller compatibility; TV builds are unsigned."
         required: false
       ANDROID_UPLOAD_KEYSTORE_PASSWORD:
         required: false
@@ -55,69 +58,16 @@ jobs:
   build-tv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - name: Build Android TV app
+        uses: decaf-ts/reusable-actions/actions/capacitor-android-build@master
         with:
           node-version: ${{ inputs.node_version }}
-          cache: npm
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
           java-version: ${{ inputs.java_version }}
-
-      - uses: android-actions/setup-android@v3
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build web shell
-        run: npm run web:build
-
-      - name: Sync Capacitor
-        run: npx cap sync android
-
-      - name: Prepare Android TV manifest
-        if: ${{ inputs.patch_tv_manifest }}
-        working-directory: android
-        run: |
-          MANIFEST=app/src/main/AndroidManifest.xml
-          if [ ! -f "$MANIFEST" ]; then
-            echo "AndroidManifest.xml not found at $MANIFEST"
-            exit 1
-          fi
-          # Touchscreen is not required on a leanback/D-pad device.
-          if ! grep -q 'android.hardware.touchscreen' "$MANIFEST"; then
-            sed -i \
-              's|<application|<uses-feature android:name="android.hardware.touchscreen" android:required="false"/>\n    <uses-feature android:name="android.software.leanback" android:required="false"/>\n    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>\n    <application|' \
-              "$MANIFEST"
-          fi
-          # Add the leanback launcher intent if it is not already present.
-          if ! grep -q 'android.intent.category.LEANBACK_LAUNCHER' "$MANIFEST"; then
-            sed -i \
-              's|android.intent.category.LAUNCHER|android.intent.category.LAUNCHER\n                <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>|' \
-              "$MANIFEST"
-          fi
-          echo "AndroidManifest.xml prepared for leanback:"
-          grep -n -E 'leanback|touchscreen' "$MANIFEST" || true
-
-      - name: Accept Android SDK licenses
-        working-directory: android
-        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
-      - name: Build ${{ inputs.build_type }} APK (TV target)
-        working-directory: android
-        run: ./gradlew :app:assemble${{ inputs.build_type }} --no-daemon
-
-      - uses: actions/upload-artifact@v4
-        if: ${{ inputs.upload_artifacts }}
-        with:
-          name: ${{ inputs.artifact_name }}
-          path: android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: error
-
-      - name: Run Android TV unit tests
-        if: ${{ inputs.build_type == 'debug' }}
-        working-directory: android
-        run: ./gradlew :app:testDebugUnitTest --no-daemon
+          build-type: ${{ inputs.build_type }}
+          web-build-command: ${{ inputs.web_build_command }}
+          artifact-name: ${{ inputs.artifact_name }}
+          upload-artifacts: ${{ inputs.upload_artifacts }}
+          build-aab: "false"
+          tv-manifest: ${{ inputs.patch_tv_manifest }}
+          run-unit-tests: "true"
+          signing-enabled: "false"

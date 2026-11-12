@@ -40,6 +40,16 @@ on:
         required: false
         type: string
         default: "app-store-connect"
+      app_id:
+        description: "iOS bundle identifier."
+        required: false
+        type: string
+        default: "com.flipbored.reader"
+      app_name:
+        description: "Human-readable application name used in release names and bodies."
+        required: false
+        type: string
+        default: "flipbored"
     secrets:
       APPLE_DISTRIBUTION_CERTIFICATE_B64:
         description: "Base64-encoded .p12 distribution certificate."
@@ -61,10 +71,9 @@ jobs:
   publish-ios:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@v7
       - name: Download iOS build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact_name }}
           path: artifacts
@@ -83,7 +92,7 @@ jobs:
         env:
           APPLE_DISTRIBUTION_CERTIFICATE_B64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_B64 }}
           APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ env.APPLE_DISTRIBUTION_CERTIFICATE_B64 }}
           p12-password: ${{ env.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
@@ -128,7 +137,7 @@ jobs:
           cd ios/App
           mkdir -p fastlane
           cat > fastlane/Appfile <<EOF
-          app_identifier("com.flipbored.reader")
+          app_identifier("${{ inputs.app_id }}")
           EOF
           cat > fastlane/Fastfile <<EOF
           lane :upload do
@@ -151,11 +160,11 @@ jobs:
 
       - name: Publish iOS artifact to GitHub Releases
         if: ${{ contains(inputs.store_targets, 'github_releases') }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: "flipbored iOS ${{ inputs.version_name }}"
-          body: "iOS build artifact for flipbored ${{ inputs.version_name }}. Signing required before App Store submission."
+          name: "${{ inputs.app_name }} iOS ${{ inputs.version_name }}"
+          body: "iOS build artifact for ${{ inputs.app_name }} ${{ inputs.version_name }}. Signing required before App Store submission."
           files: |
             artifacts/**/*.app
             ios/App/build/export/*.ipa

@@ -1,0 +1,224 @@
+name: "Capacitor Android build"
+description: "Build a Capacitor web shell and assemble the Android APK/AAB, optionally preparing a leanback/TV manifest and release signing."
+
+inputs:
+  node-version:
+    description: "Node.js version used to build the web shell."
+    required: false
+    default: "24"
+  java-version:
+    description: "Java version used by the Android Gradle build."
+    required: false
+    default: "21"
+  build-type:
+    description: "Android build type to assemble (debug | release)."
+    required: false
+    default: "debug"
+  web-build-command:
+    description: "Command that builds the Capacitor web shell."
+    required: false
+    default: "npm run web:build"
+  android-platform:
+    description: "Capacitor platform directory to sync."
+    required: false
+    default: "android"
+  artifact-name:
+    description: "Name of the uploaded artifact."
+    required: false
+    default: "android-build"
+  upload-artifacts:
+    description: "Upload the APK/AAB artifacts."
+    required: false
+    default: "true"
+  build-aab:
+    description: "Also build the release AAB (bundleRelease)."
+    required: false
+    default: "false"
+  tv-manifest:
+    description: "Patch the manifest for leanback/D-pad Android TV devices."
+    required: false
+    default: "false"
+  run-unit-tests:
+    description: "Run the Android debug unit tests."
+    required: false
+    default: "true"
+  signing-enabled:
+    description: "Configure release signing from the supplied keystore inputs."
+    required: false
+    default: "false"
+  keystore-file:
+    description: "Repository-relative path where the decoded keystore is written."
+    required: false
+    default: "android/upload.keystore"
+  keystore-base64:
+    description: "Base64-encoded upload keystore."
+    required: false
+    default: ""
+  keystore-password:
+    description: "Keystore password."
+    required: false
+    default: ""
+  key-alias:
+    description: "Key alias inside the keystore."
+    required: false
+    default: ""
+  key-password:
+    description: "Key password."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+    - name: Use Node.js ${{ inputs.node-version }}
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: "**/package-lock.json"
+
+    - name: Set up Java ${{ inputs.java-version }}
+      uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+        cache: gradle
+        cache-dependency-path: "android/**/*.gradle*"
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v4
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Build web shell
+      shell: bash
+      run: ${{ inputs.web-build-command }}
+
+    - name: Sync Capacitor
+      shell: bash
+      run: npx cap sync ${{ inputs.android-platform }}
+
+    - name: Prepare Android TV manifest
+      if: ${{ inputs.tv-manifest == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.android-platform }}
+      run: |
+        MANIFEST=app/src/main/AndroidManifest.xml
+        if [ ! -f "$MANIFEST" ]; then
+          echo "AndroidManifest.xml not found at $MANIFEST"
+          exit 1
+        fi
+        # Touchscreen is not required on a leanback/D-pad device.
+        if ! grep -q 'android.hardware.touchscreen' "$MANIFEST"; then
+          sed -i \
+            's|<application|<uses-feature android:name="android.hardware.touchscreen" android:required="false"/>\n    <uses-feature android:name="android.software.leanback" android:required="false"/>\n    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>\n    <application|' \
+            "$MANIFEST"
+        fi
+        # Add the leanback launcher intent if it is not already present.
+        if ! grep -q 'android.intent.category.LEANBACK_LAUNCHER' "$MANIFEST"; then
+          sed -i \
+            's|android.intent.category.LAUNCHER|android.intent.category.LAUNCHER\n                <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>|' \
+            "$MANIFEST"
+        fi
+        echo "AndroidManifest.xml prepared for leanback:"
+        grep -n -E 'leanback|touchscreen' "$MANIFEST" || true
+
+    - name: Accept Android SDK licenses
+      shell: bash
+      working-directory: ${{ inputs.android-platform }}
+      run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+    - name: Recover upload keystore from secret
+      if: ${{ inputs.signing-enabled == 'true' }}
+      shell: bash
+      env:
+        ANDROID_UPLOAD_KEYSTORE: ${{ inputs.keystore-base64 }}
+        KEYSTORE_FILE: ${{ inputs.keystore-file }}
+      run: |
+        if [ -n "$ANDROID_UPLOAD_KEYSTORE" ]; then
+          echo "$ANDROID_UPLOAD_KEYSTORE" | base64 -d > "$KEYSTORE_FILE"
+          echo "keystore recovered at $KEYSTORE_FILE"
+        else
+          echo "keystore input is empty; release signing will not be configured"
+        fi
+
+    - name: Write Gradle release-signing init script
+      if: ${{ inputs.signing-enabled == 'true' }}
+      shell: bash
+      env:
+        ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        ANDROID_UPLOAD_KEY_ALIAS: ${{ inputs.key-alias }}
+        ANDROID_UPLOAD_KEY_PASSWORD: ${{ inputs.key-password }}
+        KEYSTORE_FILE: ${{ inputs.keystore-file }}
+      run: |
+        cat > "${{ inputs.android-platform }}/signing.init.gradle" <<'EOF'
+        gradle.beforeProject { project ->
+          if (project.path == ":app") {
+            project.plugins.withId("com.android.application") {
+              android {
+                signingConfigs {
+                  create("release") {
+                    storeFile file(System.getenv("ANDROID_UPLOAD_KEYSTORE_FILE"))
+                    storePassword System.getenv("ANDROID_UPLOAD_KEYSTORE_PASSWORD")
+                    keyAlias System.getenv("ANDROID_UPLOAD_KEY_ALIAS")
+                    keyPassword System.getenv("ANDROID_UPLOAD_KEY_PASSWORD")
+                  }
+                }
+                buildTypes {
+                  release {
+                    signingConfig signingConfigs.getByName("release")
+                  }
+                }
+              }
+            }
+          }
+        }
+        EOF
+        {
+          echo "ANDROID_UPLOAD_KEYSTORE_FILE=${GITHUB_WORKSPACE}/${KEYSTORE_FILE}"
+          echo "ANDROID_UPLOAD_KEYSTORE_PASSWORD=${ANDROID_UPLOAD_KEYSTORE_PASSWORD}"
+          echo "ANDROID_UPLOAD_KEY_ALIAS=${ANDROID_UPLOAD_KEY_ALIAS}"
+          echo "ANDROID_UPLOAD_KEY_PASSWORD=${ANDROID_UPLOAD_KEY_PASSWORD}"
+          echo "GRADLE_SIGNING_INIT_SCRIPT=-I ${GITHUB_WORKSPACE}/${{ inputs.android-platform }}/signing.init.gradle"
+        } >> "$GITHUB_ENV"
+        echo "signing.init.gradle written"
+
+    - name: Build ${{ inputs.build-type }} APK
+      shell: bash
+      working-directory: ${{ inputs.android-platform }}
+      env:
+        ANDROID_UPLOAD_KEYSTORE_FILE: ${{ env.ANDROID_UPLOAD_KEYSTORE_FILE }}
+        ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        ANDROID_UPLOAD_KEY_ALIAS: ${{ inputs.key-alias }}
+        ANDROID_UPLOAD_KEY_PASSWORD: ${{ inputs.key-password }}
+      run: ./gradlew ${GRADLE_SIGNING_INIT_SCRIPT:-} :app:assemble${{ inputs.build-type }} --no-daemon
+
+    - name: Build release AAB
+      if: ${{ inputs.build-aab == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.android-platform }}
+      env:
+        ANDROID_UPLOAD_KEYSTORE_FILE: ${{ env.ANDROID_UPLOAD_KEYSTORE_FILE }}
+        ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        ANDROID_UPLOAD_KEY_ALIAS: ${{ inputs.key-alias }}
+        ANDROID_UPLOAD_KEY_PASSWORD: ${{ inputs.key-password }}
+      run: ./gradlew ${GRADLE_SIGNING_INIT_SCRIPT:-} :app:bundleRelease --no-daemon
+
+    - name: Upload Android artifacts
+      if: ${{ inputs.upload-artifacts == 'true' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ inputs.android-platform }}/app/build/outputs/apk/**/*.apk
+          ${{ inputs.android-platform }}/app/build/outputs/bundle/release/*.aab
+        if-no-files-found: error
+
+    - name: Run Android unit tests
+      if: ${{ inputs.run-unit-tests == 'true' && inputs.build-type == 'debug' }}
+      shell: bash
+      working-directory: ${{ inputs.android-platform }}
+      run: ./gradlew :app:testDebugUnitTest --no-daemon

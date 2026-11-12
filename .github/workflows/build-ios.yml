@@ -1,10 +1,9 @@
 name: "Build iOS (Capacitor)"
 
-# Reusable workflow: builds the flipbored Capacitor web shell and an unsigned
-# iOS .app bundle on a macOS runner. Signing is intentionally left to the store
-# publish step so the CI build never needs a distribution certificate.
-# Consumed by flipbored/.github/workflows/build-ios.yml and
-# flipbored/.github/workflows/mobile-build.yml.
+# Reusable workflow: builds a Capacitor web shell and an unsigned iOS .app
+# bundle on a macOS runner. Signing is intentionally left to the store publish
+# step so the CI build never needs a distribution certificate.
+# Consumed by flipbored/.github/workflows/build-ios.yml and mobile-build.yml.
 on:
   workflow_call:
     inputs:
@@ -33,23 +32,23 @@ on:
         required: false
         type: string
         default: "flipbored-ios"
+      web_build_command:
+        description: "Command that builds the Capacitor web shell."
+        required: false
+        type: string
+        default: "npm run web:build"
 
 jobs:
   build-ios:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: decaf-ts/reusable-actions/actions/node-setup@master
         with:
           node-version: ${{ inputs.node_version }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Build web shell
-        run: npm run web:build
+        run: ${{ inputs.web_build_command }}
 
       - name: Sync Capacitor
         run: npx cap sync ios
@@ -66,7 +65,7 @@ jobs:
             CODE_SIGNING_ALLOWED=${{ inputs.code_signing_allowed }} \
             build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ inputs.upload_artifacts }}
         with:
           name: ${{ inputs.artifact_name }}

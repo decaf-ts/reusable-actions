@@ -50,14 +50,12 @@ jobs:
     env:
       TARGET_BRANCH: ${{ inputs.target-branch }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TARGET_BRANCH }}
-      - name: Use Node.js ${{ inputs.node_version }}
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: decaf-ts/reusable-actions/actions/node-setup@master
         with:
           node-version: ${{ inputs.node_version }}
+          ref: ${{ env.TARGET_BRANCH }}
+          install: "false"
 
       - name: Clear stale overrides
         if: inputs.clear-stale-overrides == true
@@ -201,7 +199,7 @@ jobs:
           NODE
 
       - name: Run Renovate
-        uses: renovatebot/github-action@v46.1.14
+        uses: renovatebot/github-action@v46
         with:
           configurationFile: renovate-runtime.json
         env:

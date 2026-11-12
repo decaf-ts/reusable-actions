@@ -59,7 +59,7 @@ jobs:
       TARGET_BRANCH: ${{ inputs.target-branch }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.TARGET_BRANCH }}
 
@@ -76,19 +76,20 @@ jobs:
       - name: Generate Trivy Vulnerability Report
         id: trivy
         continue-on-error: ${{ inputs.scan-type == 'dep' }}
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: decaf-ts/reusable-actions/actions/trivy-gate@master
         with:
           scan-type: "fs"
+          scan-ref: "."
           output: trivy-report.json
           format: json
-          scan-ref: .
           exit-code: ${{ steps.resolve.outputs.exit-code }}
           severity: ${{ inputs.severity }}
           ignore-unfixed: ${{ inputs.ignore-unfixed }}
+          cache-key-suffix: scan
 
       - name: Upload Vulnerability Scan Results
         if: always() && inputs.upload-artifact == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-report
           path: trivy-report.json
@@ -113,22 +114,14 @@ jobs:
 
       - name: Trigger Renovate (vuln found -> security updates)
         if: always() && inputs.scan-type == 'vuln' && steps.check.outputs.vulnerabilities == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "GH_PAT not provided; skipping renovate dispatch"
-            exit 0
-          fi
-          gh api "repos/${{ github.repository }}/dispatches" -f event_type=renovate-trigger
+        uses: decaf-ts/reusable-actions/actions/renovate-dispatch@master
+        with:
+          event-type: renovate-trigger
+          token: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
 
       - name: Trigger Renovate (weekly dep pass)
         if: always() && inputs.scan-type == 'dep'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "GH_PAT not provided; skipping renovate dispatch"
-            exit 0
-          fi
-          gh api "repos/${{ github.repository }}/dispatches" -f event_type=renovate-dep-trigger
+        uses: decaf-ts/reusable-actions/actions/renovate-dispatch@master
+        with:
+          event-type: renovate-dep-trigger
+          token: ${{ secrets.GH_PAT || secrets.GH_TOKEN }}

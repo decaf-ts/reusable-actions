@@ -1,0 +1,39 @@
+name: "Snyk gate"
+description: "Run Snyk against the repository lockfile, either failing the job or reporting only."
+
+inputs:
+  fail:
+    description: "Fail the job when Snyk finds vulnerabilities (false = report only)."
+    required: false
+    default: "true"
+  args:
+    description: "Extra Snyk CLI arguments."
+    required: false
+    default: ""
+  severity-threshold:
+    description: "Minimum severity that fails the scan. Empty leaves the Snyk default."
+    required: false
+    default: ""
+  fail-on:
+    description: "When Snyk fails: all, upgradable, or patchable."
+    required: false
+    default: "upgradable"
+  strict-out-of-sync:
+    description: "Require the npm lockfile to match package.json."
+    required: false
+    default: "true"
+  sarif-file:
+    description: "SARIF output path."
+    required: false
+    default: "snyk.sarif"
+
+runs:
+  using: composite
+  steps:
+    - name: Run Snyk
+      uses: snyk/actions/node@v1
+      continue-on-error: ${{ inputs.fail != 'true' }}
+      env:
+        SNYK_TOKEN: ${{ env.SNYK_TOKEN }}
+      with:
+        args: --fail-on=${{ inputs.fail-on }} --strict-out-of-sync=${{ inputs.strict-out-of-sync }} --sarif-file-output=${{ inputs.sarif-file }} ${{ inputs.severity-threshold != '' && format('--severity-threshold={0}', inputs.severity-threshold) || '' }} ${{ inputs.args }}
