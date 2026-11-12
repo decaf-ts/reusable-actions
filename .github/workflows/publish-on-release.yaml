@@ -18,13 +18,12 @@ name: "Publish on Release"
 #
 # `id-token: write` must be granted by BOTH the calling workflow and this one.
 #
-# The job owns the single release build/test so nothing is rebuilt downstream:
-#
-#   checkout -> npm ci -> build:prod -> test:all -> docs
-#     -> npm publish --provenance  (trusted publishing)
-#
-# The docs artifact is deployed by the `pages` job in this same run (artifact
-# handoff, no second build).
+# The build/test/docs already happened once on the tag push, in
+# release-on-tag.yaml, which cached the outputs under `release-artifacts-<sha>`.
+# This workflow restores that cache and goes straight to publishing, so the
+# release run does not rebuild or re-test. If the cache is unavailable (for
+# example a manual workflow_dispatch) it falls back to building, testing with
+# coverage, and generating docs before publishing.
 
 on:
   workflow_call:
@@ -101,22 +100,54 @@ jobs:
           node-version: ${{ inputs.node_version }}
           ref: ${{ inputs.ref }}
           registry-url: https://registry.npmjs.org/
+          # Installed below only when the build fallback runs, or when the
+          # package has a publish lifecycle script that needs node_modules.
+          install: "false"
 
       - name: Set npm version for trusted publishing
         run: npm install --global npm@11.15.0
 
-      - name: Prepare integration-test infra
-        run: npm run prepare-it-tests --if-present
+      - name: Restore release build artifacts
+        # Produced by release-on-tag.yaml on the tag push for this same commit.
+        id: restore-release
+        uses: actions/cache/restore@v6
+        with:
+          key: release-artifacts-${{ github.sha }}
+          fail-on-cache-miss: false
+          path: |
+            lib
+            dist
+            docs
+            workdocs/reports/coverage
+            workdocs/reports/html
+            workdocs/reports/junit
+            workdocs/reports/data
 
-      # Build and test exactly once for this release. Nothing downstream
-      # rebuilds: the docs come from this same job and the publish uses the
-      # build output produced here.
-      - run: npm run build:prod
-      - run: npm run test:all
+      - name: Install dependencies
+        # On a cache hit the build output is already present, so install only
+        # when the package has a publish lifecycle script that needs
+        # node_modules (prepack/prepare/prepublishOnly). On a cache miss the
+        # fallback build always needs a full install.
+        run: |
+          HIT="${{ steps.restore-release.outputs.cache-hit }}"
+          if [[ "$HIT" != "true" ]] || node -e "const s=require('./package.json').scripts||{};process.exit((s.prepack||s.prepare||s.prepublishOnly)?0:1)"; then
+            npm ci
+          fi
 
-      - name: Build docs
-        if: inputs.deploy-docs != false
-        run: npm run docs
+      - name: Build, test with coverage, and generate docs (cache miss fallback)
+        # Normally a cache hit: the tagged commit was already built, tested with
+        # coverage, and documented by release-on-tag.yaml. Only rebuild when the
+        # cache is missing (manual dispatch, or a release created outside the
+        # tag pipeline).
+        if: steps.restore-release.outputs.cache-hit != 'true'
+        run: |
+          npm run prepare-it-tests --if-present
+          npm run build:prod
+          npm run coverage
+          if [[ "${{ inputs.deploy-docs }}" != "false" ]]; then
+            npm run docs
+          fi
+
       - name: Upload docs artifact
         if: inputs.deploy-docs != false
         uses: actions/upload-pages-artifact@v5

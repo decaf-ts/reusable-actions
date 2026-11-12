@@ -40,15 +40,17 @@ The pipeline is deliberately four events, one build/test each:
 * `release-on-merge-pr.yml` — on a merged PR: bump the version, commit, and
   push the tag (no build, no test — the PR already ran `CI`). The tag is
   pushed with the **PAT**, so the tag push fires the tag caller.
-* `release-on-tag.yaml` — on a tag push: the Trivy + Snyk **release gates**,
-  then the **GitHub Release** (created with the PAT so the `release` event
-  fires). No build, no publish: it only gates and creates the Release.
+* `release-on-tag.yaml` — on a tag push: the Trivy + Snyk **release gates**, then
+  the single release **build + test with coverage + docs**, whose outputs are
+  cached, then the **GitHub Release** (created with the PAT so the `release`
+  event fires). No publish here.
 * `publish-on-release.yaml` — triggered by the `release: published` event via
-  **each repository's own `publish-on-release.yaml` caller**. It runs the
-  single release build/test (`npm ci` → `build:prod` → `test:all`), generates
-  and deploys the docs, and performs the **actual `npm publish`** with OIDC
-  trusted publishing. The publishing repository's caller **must keep the
-  filename `publish-on-release.yaml`** — see "npm trusted publishing" below.
+  **each repository's own `publish-on-release.yaml` caller**. It restores the
+  build/coverage/docs cache produced by `release-on-tag.yaml`, deploys the docs,
+  and performs the **actual `npm publish`** with OIDC trusted publishing. It does
+  not rebuild or re-test on a cache hit. The publishing repository's caller
+  **must keep the filename `publish-on-release.yaml`** — see "npm trusted
+  publishing" below.
 * `codeql-analysis.yml` — CodeQL analysis.
 * `publish-android.yml` — Google Play / F-Droid / GitHub Releases (Android).
 * `publish-ios.yml` — App Store Connect / TestFlight / GitHub Releases (iOS).
@@ -113,21 +115,25 @@ is not met). The PR coverage report (artiomtr) is report-only.
 
 ## Workflow reference
 
-### `release-on-tag.yaml` (gates + GitHub Release)
+### `release-on-tag.yaml` (gates + build/test/docs + GitHub Release)
 
-Runs the Trivy + Snyk **release gates** on a tag push, then creates the
-**GitHub Release**. It does **not** build, test, publish, or deploy docs: the
-Release it creates fires the `release: published` event, which triggers each
-repository's own `publish-on-release.yaml` caller.
+Runs the Trivy + Snyk **release gates** on a tag push, then the single release
+`prepare-it-tests` → `build:prod` → `coverage` → `docs` pass, caches the outputs
+under `release-artifacts-<sha>`, and creates the **GitHub Release**. It does
+**not** publish: the Release it creates fires the `release: published` event,
+which triggers each repository's own `publish-on-release.yaml` caller.
 
-A failing gate fails the job before the Release step, so no Release is created
-and `publish-on-release.yaml` never runs — the gate failure therefore blocks
+A failing gate fails the job before the build/test, and a failing build/test/docs
+fails it before the Release step, so no Release is created and
+`publish-on-release.yaml` never runs — a gate or build failure therefore blocks
 the npm publish.
 
 ```text
 tag push
-  -> gates:  [trivy] [snyk]        (scan only, no build)
-  -> Release [PAT-authored]        (fires release: published)
+  -> gates:  [trivy] [snyk]                 (scan only)
+  -> build:  [prepare-it-tests] [build:prod] [coverage] [docs]
+  -> cache:  release-artifacts-<sha>        (build + coverage + docs)
+  -> Release [PAT-authored]                 (fires release: published)
 ```
 
 The Release **must** be created with a PAT (`GH_PAT`/`GH_TOKEN`/
@@ -137,7 +143,7 @@ The Release **must** be created with a PAT (`GH_PAT`/`GH_TOKEN`/
 
 | Input | Default | Description |
 |-------|---------|-------------|
-| `node_version` | `24` | Node.js version used by the gate tooling. |
+| `node_version` | `24` | Node.js version used by the gates, build, and tests. |
 | `run-security-scans` | `true` | Run the Trivy + Snyk release gates. |
 | `trivy-severity` | `HIGH,CRITICAL` | Trivy gate severity filter. |
 | `trivy-ignore-unfixed` | `true` | Ignore vulnerabilities without a fix. |
@@ -154,10 +160,13 @@ Caller permissions: `contents: write` (create the Release) and
 
 ### `publish-on-release.yaml` (npm publish — DO NOT RENAME, DO NOT MOVE PUBLISH)
 
-The workflow that runs the **actual `npm publish`**. It owns the single
-release build/test (`npm ci` → `build:prod` → `test:all`), generates and
-deploys the docs, and publishes with OIDC trusted publishing
-(`npm publish --provenance`).
+The workflow that runs the **actual `npm publish`**. It restores the
+build/coverage/docs cache produced by `release-on-tag.yaml` and publishes with
+OIDC trusted publishing (`npm publish --provenance`). On a cache hit it does
+**not** rebuild or re-test, and it only runs `npm ci` when the package has a
+`prepack`/`prepare`/`prepublishOnly` script that needs `node_modules`; on a
+cache miss (for example a manual `workflow_dispatch`) it falls back to
+`prepare-it-tests` → `build:prod` → `coverage` → `docs`.
 
 It is invoked by **each package repository's own
 `.github/workflows/publish-on-release.yaml` caller**, triggered by the
@@ -167,7 +176,10 @@ It is invoked by **each package repository's own
 release: published
   -> <repo>/.github/workflows/publish-on-release.yaml   (caller; entry workflow)
        -> decaf-ts/reusable-actions/.github/workflows/publish-on-release.yaml
-            [npm ci] [build:prod] [test:all]      (one build/test)
+            [restore release-artifacts-<sha>]     (from the tag run)
+              -> cache hit:  no build, no test, no docs rebuild
+              -> cache miss: prepare-it-tests + build:prod + coverage + docs
+            [npm ci only if a publish lifecycle script needs it]
             [docs] -> upload pages artifact
             [npm publish --provenance]            (OIDC trusted publishing)
        -> pages job: deploy docs artifact          (no rebuild)
@@ -342,8 +354,8 @@ event:
 |-------|----------|------------|
 | Pull request | `jest-coverage.yaml` | one `npm ci` + `build:prod` + `coverage` (which runs the full suite) |
 | PR merged | `release-on-merge-pr.yml` | **none** — bump version + push tag only |
-| Tag pushed | `release-on-tag.yaml` | **none** — Trivy + Snyk gates, then create the GitHub Release |
-| Release published | `publish-on-release.yaml` (the repo's own caller) | one `npm ci` + `build:prod` + `test:all`; docs generated + deployed from that same build; `npm publish` in the same job |
+| Tag pushed | `release-on-tag.yaml` | one `npm ci` + `prepare-it-tests` + `build:prod` + `coverage` + `docs`; outputs cached as `release-artifacts-<sha>`; then create the GitHub Release |
+| Release published | `publish-on-release.yaml` (the repo's own caller) | **none on a cache hit** — restores `release-artifacts-<sha>`, deploys docs, and runs `npm publish`; rebuilds only as a cache-miss fallback |
 
 `release-on-merge-pr.yml` pushes an automatic release-bump commit to master
 (`Github Action automatic release: vX.Y.Z`) and the tag, both with the **PAT**,
@@ -372,14 +384,20 @@ a stale build.
 | Cache | Key | Reused by |
 |-------|-----|-----------|
 | npm dependencies | `setup-node` `cache: npm`, keyed by the lockfile | every Node job (`node-setup` is the single install path) |
+| Release build output | `release-artifacts-<sha>` (build, coverage, docs) | `release-on-tag.yaml` saves it for the same tag; `publish-on-release.yaml` restores it for the same commit |
 | Trivy DB | `~/.cache/trivy`, OS + suffix, `run_id` key with restore-keys | every trivy gate/scan |
 | Gradle | `setup-java` `cache: gradle`, `android/**/*.gradle*` | Android/TV builds |
 | Docker layers | buildx `type=gha,mode=max` | image builds |
 
-Docs are passed from the `publish-on-release.yaml` `publish` job to its
-`pages` job as a workflow artifact (`docs`), not rebuilt. npm publish runs in
-the same job that built and tested, so there is no reinstall either. There is
-no separate `pages.yaml`: docs are built once, on the release event.
+`release-on-tag.yaml` builds, tests with coverage, and generates docs once on
+the tag push, then saves them with `actions/cache/save` under
+`release-artifacts-<sha>`. The `release: published` run is a different workflow
+run for the **same tag commit**, so `publish-on-release.yaml` restores that
+cache with `actions/cache/restore` and skips the build/test/docs entirely. If
+the cache is missing (manual dispatch or a release created outside the tag
+pipeline), it falls back to `prepare-it-tests` → `build:prod` → `coverage` →
+`docs`. Docs are then passed from the `publish` job to its `pages` job as a
+workflow artifact (`docs`), not rebuilt. There is no separate `pages.yaml`.
 
 ## Security scanning model (release gates)
 
@@ -389,10 +407,12 @@ The Snyk and Trivy scans are **gates** inside `release-on-tag.yaml`:
 PR merge -> release-on-merge-pr   (bump + push tag)
 tag push -> release-on-tag:
              [trivy gate] [snyk gate]            (scan only)
-             -> [GitHub Release, PAT-authored]   (only if both gates pass)
+             [prepare-it-tests] [build] [coverage] [docs]   (one build/test)
+             [cache release-artifacts-<sha>]
+             -> [GitHub Release, PAT-authored]   (only if gates + build pass)
 release  -> publish-on-release.yaml:
-             [build + test once]
-             [docs build + deploy]
+             [restore release-artifacts-<sha>]   (no rebuild/re-test on hit)
+             [docs deploy]
              [npm publish --provenance]
 ```
 
@@ -451,9 +471,14 @@ When updating a consumer or a shared workflow:
   caller and `publish-on-release.yaml`, npm >= 11.5, and a provenance statement
   on the published package.
 * Confirm the event still builds/tests only once: PR → `jest-coverage.yaml`,
-  merged PR → bump/tag only, tag → gates + Release only, release →
-  `publish-on-release.yaml` (one build/test with docs). Do not reintroduce a
-  second `npm ci`/`build:prod`/test run.
+  merged PR → bump/tag only, tag → gates + build/test/coverage/docs + cache +
+  Release, release → `publish-on-release.yaml` (restores the cache; publishes
+  without rebuilding). Do not reintroduce a second `build:prod`/test/`docs` run
+  in `publish-on-release.yaml`.
+* Confirm the release cache is shared: `release-on-tag.yaml` saves
+  `release-artifacts-${{ github.sha }}` and `publish-on-release.yaml` restores
+  the **same key and the same `path` list** (the cache version is derived from
+  the path list, so the two must stay identical).
 * Confirm the tag **and** the GitHub Release are created with the **PAT**, not
   `github.token`, or the `release` event never fires and nothing publishes.
 * Confirm the consumer still has its own `publish-on-release.yaml` caller on

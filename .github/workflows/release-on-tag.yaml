@@ -3,8 +3,9 @@ name: "Release on Tag"
 # Triggered by the tag pushed from release-on-merge-pr.yaml (or a manual
 # tag-release.sh push). Runs the snyk + trivy RELEASE GATES first: a failing
 # gate blocks the GitHub Release from being created, which in turn blocks
-# publish-on-release (npm publish). Only when the gates are green is the
-# Release created (PAT-authored so the `release` event fires).
+# publish-on-release (npm publish). Only when the gates are green does it run
+# the single release BUILD + TEST (+ docs), cache the outputs, and create the
+# Release (PAT-authored so the `release` event fires).
 #
 # IMPORTANT -- npm trusted publishing: the publish does NOT happen here. The
 # Release created below fires the `release: published` event, which triggers
@@ -12,6 +13,9 @@ name: "Release on Tag"
 # validates the CALLING workflow's filename, so that caller must keep the name
 # `publish-on-release.yaml`. Do not move `npm publish` into this workflow: the
 # GitHub Release event is what keeps the trusted-publisher identity intact.
+#
+# Build/test/docs are cached under `release-artifacts-<sha>` and restored by
+# publish-on-release.yaml, so the publish run neither rebuilds nor re-tests.
 
 on:
   workflow_call:
@@ -75,16 +79,18 @@ jobs:
     env:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Use Node.js ${{ inputs.node_version }}
-        uses: actions/setup-node@v7
+      - name: Set up Node.js
+        uses: decaf-ts/reusable-actions/actions/node-setup@master
         with:
           node-version: ${{ inputs.node_version }}
+          # Install after the gates so Trivy scans the source tree, not
+          # node_modules.
+          install: "false"
 
       # ------------------------------------------------------------------
       # Release gates: any failure below blocks the Release and the publish.
-      # Scans only -- no build, no install.
+      # Scans only -- run before dependencies are installed so the fs scan does
+      # not walk node_modules.
       # ------------------------------------------------------------------
       - name: Trivy release gate
         if: inputs.run-security-scans != false
@@ -130,12 +136,52 @@ jobs:
           token: ${{ secrets.GH_PAT || secrets.GH_TOKEN || secrets.CONSECUTIVE_ACTION_TRIGGER }}
 
       # ------------------------------------------------------------------
+      # Release build + test. This is the single release build/test pass; its
+      # outputs (build, coverage reports, docs) are cached so the separate
+      # publish-on-release.yaml run for the `release` event can publish and
+      # deploy docs without rebuilding, re-testing, or re-running coverage.
+      # ------------------------------------------------------------------
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare integration-test infra
+        run: npm run prepare-it-tests --if-present
+
+      - name: Build
+        run: npm run build:prod
+
+      - name: Test (with coverage)
+        # `coverage` runs the full test suite and writes both
+        # workdocs/reports/coverage and workdocs/reports/html. `npm run docs`
+        # copies those into the docs site, so coverage must run before docs.
+        run: npm run coverage
+
+      - name: Build docs
+        run: npm run docs
+
+      - name: Cache release artifacts
+        # Restored by publish-on-release.yaml via actions/cache/restore with the
+        # same key. The commit SHA is identical on the tag push and on the
+        # release event (a release points at the tagged commit), so the cache
+        # matches. A save collision on a re-run is not fatal.
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          key: release-artifacts-${{ github.sha }}
+          path: |
+            lib
+            dist
+            docs
+            workdocs/reports/coverage
+            workdocs/reports/html
+            workdocs/reports/junit
+            workdocs/reports/data
+
+      # ------------------------------------------------------------------
       # Release creation. This is what triggers publish-on-release.
       # ------------------------------------------------------------------
-      - name: Build Release
+      - name: Create release metadata
         run: echo ${{ github.sha }} > Release.txt
-      - name: Test
-        run: cat Release.txt
       - name: Release
         # A PAT (via the action's token INPUT, not env) so the created release is
         # authored by a real user. Releases created with the default GITHUB_TOKEN
